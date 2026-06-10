@@ -3,20 +3,5 @@
   "buildCommand": "npx prisma generate && next build",
   "installCommand": "npm install",
   "framework": "nextjs",
-  "regions": ["bom1"],
-  "env": {
-    "NEXTAUTH_URL": "@nextauth_url",
-    "NEXTAUTH_SECRET": "@nextauth_secret",
-    "DATABASE_URL": "@database_url",
-    "DIRECT_URL": "@direct_url",
-    "ABACUSAI_API_KEY": "@abacusai_api_key",
-    "KITE_API_KEY": "@kite_api_key",
-    "KITE_API_SECRET": "@kite_api_secret",
-    "TELEGRAM_BOT_TOKEN": "@telegram_bot_token",
-    "WEB_APP_ID": "@web_app_id",
-    "NOTIF_ID_TRADE_ENTRY_ALERT": "@notif_id_trade_entry_alert",
-    "NOTIF_ID_TRADE_EXIT_ALERT": "@notif_id_trade_exit_alert",
-    "NOTIF_ID_DAILY_PL_SUMMARY": "@notif_id_daily_pl_summary",
-    "NOTIF_ID_RISK_LIMIT_WARNING": "@notif_id_risk_limit_warning"
-  }
+  "regions": ["bom1"]
 }
