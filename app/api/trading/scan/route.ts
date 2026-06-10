@@ -486,14 +486,13 @@ async function executeLiveTrade(
       const { getUserKiteClient } = await import('@/lib/kite');
       const { client } = await getUserKiteClient(userId);
       if (client) {
-        const orderId = await client.placeOrder('regular', {
+        const orderId = await client.placeOrder({
           tradingsymbol: signal.symbol.replace(/^NSE:/, ''),
           exchange: 'NSE',
           transaction_type: signal.direction,
           quantity,
           order_type: 'MARKET',
           product: 'MIS',
-          validity: 'DAY',
         });
         await prisma.trade.update({ where: { id: tradeId }, data: { orderId: String(orderId) } });
       }
