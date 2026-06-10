@@ -1,5 +1,7 @@
 'use client';
 
+import { memo } from 'react';
+
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Play, Square, XCircle, Search, Zap } from 'lucide-react';
@@ -23,7 +25,7 @@ interface BotControlsProps {
   onScan: () => void;
 }
 
-export function BotControls({ botStatus, onStart, onStop, onExitAll, onScan }: BotControlsProps) {
+export const BotControls = memo(function BotControls({ botStatus, onStart, onStop, onExitAll, onScan }: BotControlsProps) {
   const isRunning = botStatus === 'RUNNING';
 
   return (
@@ -75,4 +77,4 @@ export function BotControls({ botStatus, onStart, onStop, onExitAll, onScan }: B
       </CardContent>
     </Card>
   );
-}
+});

@@ -2,7 +2,7 @@
 
 import { Card, CardContent } from '@/components/ui/card';
 import { TrendingUp, TrendingDown, BarChart3, Target, Wallet, Shield } from 'lucide-react';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, memo } from 'react';
 import { useInView } from 'react-intersection-observer';
 
 interface StatusCardsProps {
@@ -46,7 +46,7 @@ function AnimatedNumber({ value, prefix = '', suffix = '', decimals = 0 }: { val
   );
 }
 
-export function StatusCards({ dailyPnl, openPositions, totalTrades, winRate, capital, maxDailyLoss }: StatusCardsProps) {
+export const StatusCards = memo(function StatusCards({ dailyPnl, openPositions, totalTrades, winRate, capital, maxDailyLoss }: StatusCardsProps) {
   const pnlPositive = (dailyPnl ?? 0) >= 0;
   const lossUsed = Math.abs(Math.min(dailyPnl ?? 0, 0));
   const lossPercent = maxDailyLoss > 0 ? (lossUsed / maxDailyLoss) * 100 : 0;
@@ -123,4 +123,4 @@ export function StatusCards({ dailyPnl, openPositions, totalTrades, winRate, cap
       )) ?? null}
     </div>
   );
-}
+});
