@@ -1,0 +1,366 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  password      String
+  role          String    @default("user")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  accounts      Account[]
+  sessions      Session[]
+  trades        Trade[]
+  botSessions   BotSession[]
+  tradingConfig TradingConfig?
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TradingConfig {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  maxDailyLoss      Float    @default(500)
+  maxPositions      Int      @default(3)
+  capitalAmount     Float    @default(10000)
+  squareOffTime     String   @default("15:10")
+  enableEquity      Boolean  @default(true)
+  enableFnO         Boolean  @default(true)
+  scanInterval      Int      @default(120)
+  enableMomentum    Boolean  @default(true)
+  enableRSI         Boolean  @default(true)
+  enableNewsSentiment Boolean @default(true)
+  enableMACD        Boolean  @default(true)
+  enableBollinger   Boolean  @default(true)
+  enableSupertrend  Boolean  @default(true)
+  enableVWAP        Boolean  @default(true)
+  enableEMACross    Boolean  @default(true)
+  telegramChatId    String?  @default("")
+  enableTelegram    Boolean  @default(false)
+  kiteApiKey        String?  @default("")
+  kiteApiSecret     String?  @default("")
+  stopLossPercent   Float    @default(1.0)
+  targetPercent     Float    @default(2.0)
+  brokerType        String   @default("kite")
+  openalgoApiKey    String?  @default("")
+  openalgoHost      String?  @default("http://127.0.0.1:5000")
+  fyersAppId        String?  @default("")
+  fyersToken        String?  @default("")
+  kotakConsumerKey  String?  @default("")
+  kotakToken        String?  @default("")
+  positionSizing    String   @default("half-kelly")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model BacktestResult {
+  id              String   @id @default(cuid())
+  userId          String
+  strategyName    String
+  symbol          String?
+  period          Int      @default(30)
+  totalTrades     Int      @default(0)
+  winCount        Int      @default(0)
+  lossCount       Int      @default(0)
+  totalPnl        Float    @default(0)
+  winRate         Float    @default(0)
+  maxDrawdown     Float    @default(0)
+  sharpeRatio     Float    @default(0)
+  profitFactor    Float    @default(0)
+  avgWin          Float    @default(0)
+  avgLoss         Float    @default(0)
+  tradesData      String?  
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Trade {
+  id              String   @id @default(cuid())
+  userId          String
+  symbol          String
+  exchange        String   @default("NSE")
+  segment         String   @default("EQUITY")
+  direction       String
+  quantity        Int
+  entryPrice      Float
+  exitPrice       Float?
+  stopLoss        Float
+  target          Float
+  pnl             Float?
+  status          String   @default("OPEN")
+  strategy        String
+  orderId         String?
+  exitOrderId     String?
+  entryTime       DateTime @default(now())
+  exitTime        DateTime?
+  notes           String?
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, entryTime])
+}
+
+model BotSession {
+  id          String   @id @default(cuid())
+  userId      String
+  status      String   @default("STOPPED")
+  startedAt   DateTime?
+  stoppedAt   DateTime?
+  dailyPnl    Float    @default(0)
+  tradesCount Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model TradingLog {
+  id        String   @id @default(cuid())
+  level     String   @default("INFO")
+  source    String
+  message   String
+  data      String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([level])
+}
+
+model KiteToken {
+  id           String   @id @default(cuid())
+  userId       String   @default("")
+  accessToken  String
+  requestToken String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+}
+
+model MarketData {
+  id          String   @id @default(cuid())
+  symbol      String
+  exchange    String   @default("NSE")
+  lastPrice   Float
+  open        Float?
+  high        Float?
+  low         Float?
+  close       Float?
+  volume      Int?
+  change      Float?
+  changePct   Float?
+  timestamp   DateTime @default(now())
+
+  @@index([symbol, timestamp])
+}
+
+model TradeJournal {
+  id              String   @id @default(cuid())
+  userId          String
+  tradeId         String?
+  symbol          String?
+  direction       String?
+  entryPrice      Float?
+  exitPrice       Float?
+  pnl             Float?
+  strategy        String?
+  emotion         String?  @default("neutral")
+  notes           String?
+  aiInsight       String?
+  tags            String?  @default("")
+  rating          Int?     @default(3)
+  lessonsLearned  String?
+  marketCondition String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, symbol])
+}
+
+model DailyPnl {
+  id          String   @id @default(cuid())
+  date        DateTime
+  totalPnl    Float    @default(0)
+  tradesCount Int      @default(0)
+  winCount    Int      @default(0)
+  lossCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@unique([date])
+}
+
+// ─── Phase 7: Walk-Forward Optimization ───────────────────────────────────
+model WalkForwardResult {
+  id                   String   @id @default(cuid())
+  userId               String
+  symbol               String
+  strategy             String
+  overallStability     Float    @default(0)
+  robustnessScore      Float    @default(0)
+  outSampleWinRate     Float    @default(0)
+  outSampleProfitFactor Float   @default(0)
+  isRobust             Boolean  @default(false)
+  recommendedParams    String?  // JSON
+  windowsData          String?  // JSON
+  createdAt            DateTime @default(now())
+
+  @@index([userId, strategy])
+  @@index([userId, createdAt])
+}
+
+// ─── Phase 7: Monte Carlo Simulation ──────────────────────────────────────
+model MonteCarloResult {
+  id                      String   @id @default(cuid())
+  userId                  String
+  simulations             Int      @default(1000)
+  tradingDays             Int      @default(30)
+  initialCapital          Float
+  meanReturn              Float    @default(0)
+  medianReturn            Float    @default(0)
+  p5Return                Float    @default(0)
+  p95Return               Float    @default(0)
+  var95                   Float    @default(0)
+  cvar95                  Float    @default(0)
+  maxDrawdownMean         Float    @default(0)
+  maxDrawdownWorst        Float    @default(0)
+  probabilityOfProfit     Float    @default(0)
+  probabilityOfRuin       Float    @default(0)
+  probabilityOfDoubling   Float    @default(0)
+  createdAt               DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// ─── Phase 7: XGBoost Predictions Audit ───────────────────────────────────
+model XGBoostPrediction {
+  id                String   @id @default(cuid())
+  symbol            String
+  direction         String
+  probability       Float
+  confidence        Float
+  rawScore          Float
+  featureImportance String?  // JSON
+  reasoning         String?
+  createdAt         DateTime @default(now())
+
+  @@index([symbol, createdAt])
+}
+
+// ─── Phase 9: Agent Pipeline Runs ─────────────────────────────────────────
+model AgentRun {
+  id                  String   @id @default(cuid())
+  userId              String
+  runId               String   @unique
+  action              String   // full_pipeline | monitor | learn
+  stage               String   // complete | blocked | error
+  paperTrading        Boolean  @default(true)
+  totalRawSignals     Int      @default(0)
+  afterEnsemble       Int      @default(0)
+  afterConfidence     Int      @default(0)
+  approvedSignals     Int      @default(0)
+  executedSignals     Int      @default(0)
+  regime              String?
+  macroSignal         String?
+  portfolioHeat       Float    @default(0)
+  durationMs          Int      @default(0)
+  summary             String?  // JSON
+  createdAt           DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// ─── Phase 9: Agent Decision Audit Trail ──────────────────────────────────
+model AgentDecision {
+  id          String   @id @default(cuid())
+  userId      String
+  agentName   String   // signal_agent | risk_manager | execution_agent | portfolio_manager
+  symbol      String?
+  direction   String?
+  decision    String   // APPROVED | REJECTED | EXECUTED | STOPPED | TRAILING_UPDATED
+  reason      String?
+  confidence  Float?
+  quantity    Int?
+  price       Float?
+  metadata    String?  // JSON
+  createdAt   DateTime @default(now())
+
+  @@index([userId, agentName, createdAt])
+  @@index([userId, symbol])
+}
+
+// ─── Phase 9: Self-Learning Events ────────────────────────────────────────
+model LearningEvent {
+  id                  String   @id @default(cuid())
+  userId              String
+  date                String
+  totalTradesAnalyzed Int      @default(0)
+  dailyPnl            Float    @default(0)
+  winRate             Float    @default(0)
+  weightUpdates       String?  // JSON array of ConfidenceWeightUpdate
+  insights            String?  // JSON array of LearningInsight
+  walkForwardTriggered Boolean @default(false)
+  createdAt           DateTime @default(now())
+
+  @@index([userId, date])
+}
+
+// ─── Phase 9: Dynamic Strategy Confidence Weights ─────────────────────────
+model ConfidenceWeights {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  weights      String   // JSON: Record<strategy, number>
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+}
+
+// ─── Phase 8: Portfolio Snapshots ─────────────────────────────────────────
+model PortfolioSnapshot {
+  id                     String   @id @default(cuid())
+  userId                 String
+  totalCapital           Float
+  usedCapital            Float    @default(0)
+  portfolioHeatPct       Float    @default(0)
+  unrealizedPnl          Float    @default(0)
+  totalPositions         Int      @default(0)
+  riskGrade              String   @default("LOW")
+  riskScore              Float    @default(0)
+  sectorConcentration    String?  // JSON
+  alerts                 String?  // JSON array
+  createdAt              DateTime @default(now())
+
+  @@index([userId, createdAt])
+}

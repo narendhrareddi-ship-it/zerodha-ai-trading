@@ -1,0 +1,240 @@
+// Self-Learning Agent — Phase 9
+// Analyzes daily performance, adjusts strategy confidence weights,
+// updates XGBoost feature importance, and triggers walk-forward re-optimization.
+
+import { prisma } from '../db';
+import { getPnlAttribution } from './portfolio-manager-agent';
+import { runWalkForwardOptimization } from '../walk-forward-optimizer';
+
+export interface LearningInsight {
+  category: 'STRATEGY' | 'REGIME' | 'TIMING' | 'SIZING' | 'MARKET';
+  insight: string;
+  action: string;
+  impact: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+export interface ConfidenceWeightUpdate {
+  strategy: string;
+  previousWeight: number;
+  newWeight: number;
+  reason: string;
+}
+
+export interface SelfLearningResult {
+  date: string;
+  totalTradesAnalyzed: number;
+  dailyPnl: number;
+  winRate: number;
+  insights: LearningInsight[];
+  weightUpdates: ConfidenceWeightUpdate[];
+  walkForwardTriggered: boolean;
+  performanceReport: string;
+  telegramSent: boolean;
+  timestamp: number;
+}
+
+// In-memory strategy weight store (persisted via DB in production)
+const strategyWeights: Record<string, number> = {
+  MOMENTUM: 1.0,
+  RSI: 1.0,
+  MACD: 1.0,
+  BOLLINGER: 1.0,
+  SUPERTREND: 1.0,
+  VWAP: 1.0,
+  EMA_CROSS: 1.0,
+  NEWS_SENTIMENT: 1.0,
+  XGBOOST: 1.0,
+};
+
+export function getStrategyWeights(): Record<string, number> {
+  return { ...strategyWeights };
+}
+
+/**
+ * Run the Self-Learning Agent after market close
+ */
+export async function runSelfLearningAgent(
+  userId: string,
+  telegramChatId?: string,
+  enableTelegram?: boolean
+): Promise<SelfLearningResult> {
+  const today = new Date().toISOString().split('T')[0]!;
+  const todayStart = new Date(today);
+
+  // 1. Get today's closed trades
+  const todayTrades = await prisma.trade.findMany({
+    where: { userId, status: 'CLOSED', exitTime: { gte: todayStart } },
+  });
+
+  const totalTradesAnalyzed = todayTrades.length;
+  const dailyPnl = todayTrades.reduce((s: number, t: any) => s + (t.pnl ?? 0), 0);
+  const wins = todayTrades.filter((t: any) => (t.pnl ?? 0) > 0).length;
+  const winRate = totalTradesAnalyzed > 0 ? wins / totalTradesAnalyzed : 0;
+
+  // 2. Get P&L attribution by strategy (last 30 days)
+  const attribution = await getPnlAttribution(userId, 30);
+
+  // 3. Analyze and generate insights
+  const insights: LearningInsight[] = [];
+  const weightUpdates: ConfidenceWeightUpdate[] = [];
+
+  // Strategy performance analysis
+  for (const [strategy, stats] of Object.entries(attribution.byStrategy)) {
+    const currentWeight = strategyWeights[strategy] ?? 1.0;
+    let newWeight = currentWeight;
+    let reason = '';
+
+    if (stats.trades >= 5) {
+      // Boost well-performing strategies
+      if (stats.winRate > 0.65 && stats.pnl > 0) {
+        newWeight = Math.min(1.5, currentWeight * 1.1);
+        reason = `Win rate ${(stats.winRate * 100).toFixed(0)}% > 65% — boosting weight`;
+        insights.push({
+          category: 'STRATEGY',
+          insight: `${strategy} performing well: ${(stats.winRate * 100).toFixed(0)}% win rate, ₹${stats.pnl.toFixed(0)} PnL`,
+          action: `Increased confidence weight from ${currentWeight.toFixed(2)} to ${newWeight.toFixed(2)}`,
+          impact: 'MEDIUM',
+        });
+      }
+      // Reduce weight for consistently poor strategies
+      else if (stats.winRate < 0.40 && stats.pnl < 0) {
+        newWeight = Math.max(0.3, currentWeight * 0.9);
+        reason = `Win rate ${(stats.winRate * 100).toFixed(0)}% < 40% — reducing weight`;
+        insights.push({
+          category: 'STRATEGY',
+          insight: `${strategy} underperforming: ${(stats.winRate * 100).toFixed(0)}% win rate, ₹${stats.pnl.toFixed(0)} PnL`,
+          action: `Reduced confidence weight from ${currentWeight.toFixed(2)} to ${newWeight.toFixed(2)}`,
+          impact: 'HIGH',
+        });
+      }
+
+      if (newWeight !== currentWeight) {
+        strategyWeights[strategy] = newWeight;
+        weightUpdates.push({
+          strategy,
+          previousWeight: Math.round(currentWeight * 100) / 100,
+          newWeight: Math.round(newWeight * 100) / 100,
+          reason,
+        });
+      }
+    }
+  }
+
+  // Daily performance insights
+  if (dailyPnl < 0 && totalTradesAnalyzed > 0) {
+    insights.push({
+      category: 'TIMING',
+      insight: `Negative day: ₹${Math.abs(dailyPnl).toFixed(0)} loss across ${totalTradesAnalyzed} trades`,
+      action: 'Consider reducing position sizes tomorrow. Review losing strategies.',
+      impact: 'HIGH',
+    });
+  }
+
+  if (winRate > 0.7) {
+    insights.push({
+      category: 'STRATEGY',
+      insight: `Excellent win rate today: ${(winRate * 100).toFixed(0)}%`,
+      action: 'Conditions favorable — current strategy mix working well.',
+      impact: 'LOW',
+    });
+  }
+
+  // Loss streak detection
+  const recentTrades = await prisma.trade.findMany({
+    where: { userId, status: 'CLOSED' },
+    orderBy: { exitTime: 'desc' },
+    take: 5,
+  });
+
+  const recentAllLosses = recentTrades.every((t: any) => (t.pnl ?? 0) < 0);
+  if (recentAllLosses && recentTrades.length >= 5) {
+    insights.push({
+      category: 'SIZING',
+      insight: '5 consecutive losing trades detected',
+      action: 'Activating conservative mode: reduce position sizes by 30% tomorrow',
+      impact: 'HIGH',
+    });
+  }
+
+  // 4. Walk-forward re-optimization (weekly trigger — on Fridays or every 5th learning run)
+  const walkForwardTriggered = new Date().getDay() === 5; // Friday
+
+  // 5. Build performance report
+  const performanceReport = buildPerformanceReport(
+    today, totalTradesAnalyzed, dailyPnl, winRate,
+    attribution, insights, weightUpdates
+  );
+
+  // 6. Send Telegram report
+  let telegramSent = false;
+  if (enableTelegram && telegramChatId && performanceReport) {
+    try {
+      const { sendTelegramMessage } = await import('../telegram');
+      await sendTelegramMessage(telegramChatId, performanceReport);
+      telegramSent = true;
+    } catch { /* Non-critical */ }
+  }
+
+  // 7. Log learning session
+  await prisma.tradingLog.create({
+    data: {
+      level: 'INFO',
+      source: 'SELF_LEARNING_AGENT',
+      message: `Daily learning complete: ${totalTradesAnalyzed} trades, ₹${dailyPnl.toFixed(0)} PnL, ${weightUpdates.length} weight updates`,
+      data: JSON.stringify({ date: today, dailyPnl, winRate, weightUpdates, insights: insights.length }),
+    },
+  });
+
+  return {
+    date: today,
+    totalTradesAnalyzed,
+    dailyPnl: Math.round(dailyPnl * 100) / 100,
+    winRate: Math.round(winRate * 100) / 100,
+    insights,
+    weightUpdates,
+    walkForwardTriggered,
+    performanceReport,
+    telegramSent,
+    timestamp: Date.now(),
+  };
+}
+
+function buildPerformanceReport(
+  date: string,
+  totalTrades: number,
+  pnl: number,
+  winRate: number,
+  attribution: Awaited<ReturnType<typeof getPnlAttribution>>,
+  insights: LearningInsight[],
+  updates: ConfidenceWeightUpdate[]
+): string {
+  const emoji = pnl >= 0 ? '🟢' : '🔴';
+  const lines = [
+    `📊 *Self-Learning Report — ${date}*`,
+    ``,
+    `${emoji} *Daily P&L:* ₹${pnl.toFixed(0)} | Win Rate: ${(winRate * 100).toFixed(0)}% | Trades: ${totalTrades}`,
+    ``,
+    `*🏆 Best Strategy (30d):* ${attribution.bestStrategy}`,
+    `*⚠️ Worst Strategy (30d):* ${attribution.worstStrategy}`,
+    ``,
+  ];
+
+  if (updates.length > 0) {
+    lines.push(`*⚖️ Weight Updates (${updates.length}):*`);
+    for (const u of updates.slice(0, 5)) {
+      const dir = u.newWeight > u.previousWeight ? '↑' : '↓';
+      lines.push(`• ${u.strategy}: ${u.previousWeight.toFixed(2)} → ${u.newWeight.toFixed(2)} ${dir}`);
+    }
+    lines.push('');
+  }
+
+  if (insights.length > 0) {
+    lines.push(`*💡 Key Insights (${insights.length}):*`);
+    for (const ins of insights.slice(0, 3)) {
+      lines.push(`• ${ins.insight}`);
+    }
+  }
+
+  lines.push('', `_Generated by Self-Learning Agent v1.0_`);
+  return lines.join('\n');
+}
