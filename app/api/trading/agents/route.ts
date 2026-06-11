@@ -11,7 +11,7 @@ import { runRegimeAgent } from '@/lib/agents/market-regime-agent';
 import { runRiskManagerAgent } from '@/lib/agents/risk-manager-agent';
 import { runExecutionAgent } from '@/lib/agents/execution-agent';
 import { runPortfolioManagerAgent } from '@/lib/agents/portfolio-manager-agent';
-import { runSelfLearningAgent } from '@/lib/agents/self-learning-agent';
+import { runSelfLearningAgent, getStrategyWeightsFromDb } from '@/lib/agents/self-learning-agent';
 import { getBatchHistoricalPrices } from '@/lib/historical-data';
 import { computeBatchFeatures } from '@/lib/feature-store';
 import { runDataGuard } from '@/lib/real-data-guard';
@@ -141,6 +141,8 @@ export async function POST(request: Request) {
       emaCross: config.enableEMACross,
     };
 
+    const strategyWeights = await getStrategyWeightsFromDb(userId);
+
     const signalResult = await runSignalAgent(stocks, histMap, {
       enabledStrategies,
       minVoteCount: 2,
@@ -149,6 +151,7 @@ export async function POST(request: Request) {
       enableNewsSentiment: config.enableNewsSentiment,
       newsHeadlines,
       apiKey: process.env.ABACUSAI_API_KEY,
+      strategyWeights,
     });
 
     // Step 5: Run Market Regime Agent

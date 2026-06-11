@@ -8,6 +8,7 @@ import { isMarketOpen } from '@/lib/trading-engine';
 import { checkDrawdownStatus } from '@/lib/drawdown-kill-switch';
 import { getPortfolioRiskSnapshot } from '@/lib/portfolio-risk-agent';
 import { detectMarketRegime } from '@/lib/market-regime';
+import { getStrategyWeightsFromDb } from '@/lib/agents/self-learning-agent';
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -113,6 +114,9 @@ export async function GET() {
       getPortfolioRiskSnapshot(userId).catch(() => null),
     ]);
 
+    // Load strategy weights
+    const weights = await getStrategyWeightsFromDb(userId);
+
     return NextResponse.json({
       botStatus: botSession?.status ?? 'STOPPED',
       dailyPnl,
@@ -124,15 +128,15 @@ export async function GET() {
       maxPositions: config?.maxPositions ?? 3,
       isMarketOpen: isMarketOpen(),
       strategies: [
-        { name: 'Momentum', enabled: config?.enableMomentum ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'MOMENTUM')?.length ?? 0 },
-        { name: 'RSI', enabled: config?.enableRSI ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'RSI')?.length ?? 0 },
-        { name: 'MACD', enabled: config?.enableMACD ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'MACD')?.length ?? 0 },
-        { name: 'Bollinger Bands', enabled: config?.enableBollinger ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'BOLLINGER_BANDS')?.length ?? 0 },
-        { name: 'Supertrend', enabled: config?.enableSupertrend ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'SUPERTREND')?.length ?? 0 },
-        { name: 'VWAP', enabled: config?.enableVWAP ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'VWAP')?.length ?? 0 },
-        { name: 'EMA Crossover', enabled: config?.enableEMACross ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'EMA_CROSSOVER')?.length ?? 0 },
-        { name: 'News Sentiment', enabled: config?.enableNewsSentiment ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'NEWS_SENTIMENT')?.length ?? 0 },
-        { name: 'XGBoost AI', enabled: true, signals: 0, trades: 0 },
+        { name: 'Momentum', enabled: config?.enableMomentum ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'MOMENTUM')?.length ?? 0, weight: weights?.MOMENTUM ?? 1.0 },
+        { name: 'RSI', enabled: config?.enableRSI ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'RSI')?.length ?? 0, weight: weights?.RSI ?? 1.0 },
+        { name: 'MACD', enabled: config?.enableMACD ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'MACD')?.length ?? 0, weight: weights?.MACD ?? 1.0 },
+        { name: 'Bollinger Bands', enabled: config?.enableBollinger ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'BOLLINGER_BANDS' || t?.strategy === 'BOLLINGER')?.length ?? 0, weight: weights?.BOLLINGER ?? 1.0 },
+        { name: 'Supertrend', enabled: config?.enableSupertrend ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'SUPERTREND')?.length ?? 0, weight: weights?.SUPERTREND ?? 1.0 },
+        { name: 'VWAP', enabled: config?.enableVWAP ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'VWAP')?.length ?? 0, weight: weights?.VWAP ?? 1.0 },
+        { name: 'EMA Crossover', enabled: config?.enableEMACross ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'EMA_CROSSOVER' || t?.strategy === 'EMA_CROSS')?.length ?? 0, weight: weights?.EMA_CROSS ?? 1.0 },
+        { name: 'News Sentiment', enabled: config?.enableNewsSentiment ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'NEWS_SENTIMENT')?.length ?? 0, weight: weights?.NEWS_SENTIMENT ?? 1.0 },
+        { name: 'XGBoost AI', enabled: true, signals: 0, trades: 0, weight: weights?.XGBOOST ?? 1.0 },
       ],
       positions,
       recentTrades,

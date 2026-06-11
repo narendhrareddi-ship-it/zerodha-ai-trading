@@ -11,31 +11,66 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { isMarketOpen, shouldSquareOff, logTradingEvent } from '@/lib/trading-engine';
-import { runAllStrategies, newsSentimentStrategy, type MarketDataPoint } from '@/lib/strategies';
-import { detectMarketRegime, filterSignalsByRegime } from '@/lib/market-regime';
-import { ensembleVote, votingResultsToSignals } from '@/lib/ensemble-voting';
+import { type MarketDataPoint } from '@/lib/strategies';
 import { getBatchHistoricalPrices } from '@/lib/historical-data';
 import { getRealisticMarketData } from '@/lib/nse-data';
 import { getUserKiteClient, WATCHLIST_STOCKS } from '@/lib/kite';
 import { computeBatchFeatures } from '@/lib/feature-store';
-import { batchPredictXGBoost } from '@/lib/xgboost-predictor';
-import { scoreConfidence } from '@/lib/confidence-scorer';
-import { analyzeMarketBreadth, getBreadthSizingMultiplier } from '@/lib/market-breadth';
+import { runSignalAgent } from '@/lib/agents/signal-agent';
+import { runRegimeAgent } from '@/lib/agents/market-regime-agent';
+import { runRiskManagerAgent } from '@/lib/agents/risk-manager-agent';
+import { runExecutionAgent } from '@/lib/agents/execution-agent';
+import { runPortfolioManagerAgent } from '@/lib/agents/portfolio-manager-agent';
+import { getStrategyWeightsFromDb } from '@/lib/agents/self-learning-agent';
 import { checkDrawdownStatus, logKillSwitchEvent } from '@/lib/drawdown-kill-switch';
-import { getPortfolioRiskSnapshot, canAddPosition } from '@/lib/portfolio-risk-agent';
-import { calculateDynamicRiskSize } from '@/lib/dynamic-risk-sizer';
-import { estimateSlippage } from '@/lib/slippage-model';
-import { calculateTrailingStop } from '@/lib/trailing-stop';
 import { sendTradeEntryAlert, sendRiskWarning } from '@/lib/notifications';
 
-export async function POST() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const userId = (session.user as any)?.id;
-  if (!userId) return NextResponse.json({ error: 'User ID not found' }, { status: 401 });
-
+export async function POST(request: Request) {
   const startTime = Date.now();
+  try {
+    const authHeader = request.headers.get('authorization');
+    const isCron = authHeader === `Bearer ${process.env.CRON_SECRET}`;
 
+    if (isCron) {
+      // Find all users with RUNNING bots
+      const activeSessions = await prisma.botSession.findMany({
+        where: { status: 'RUNNING' },
+        select: { userId: true },
+      });
+      const userIds = Array.from(new Set(activeSessions.map(s => s.userId)));
+
+      if (userIds.length === 0) {
+        return NextResponse.json({ message: 'No active bot sessions to scan.', scannedUsersCount: 0, results: [] });
+      }
+
+      const scanPromises = userIds.map(async (uid) => {
+        try {
+          const scanResponse = await runScanForUser(uid, Date.now());
+          const scanData = await scanResponse.json().catch(() => ({}));
+          return { userId: uid, status: scanResponse.status, summary: scanData };
+        } catch (err: any) {
+          return { userId: uid, status: 500, error: err?.message };
+        }
+      });
+      const results = await Promise.all(scanPromises);
+
+      return NextResponse.json({ isCron: true, scannedUsersCount: userIds.length, results });
+    }
+
+    // Normal browser request
+    const session = await getServerSession(authOptions);
+    if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const userId = (session.user as any)?.id;
+    if (!userId) return NextResponse.json({ error: 'User ID not found' }, { status: 401 });
+
+    return await runScanForUser(userId, startTime);
+  } catch (err: any) {
+    console.error('Scan route handler error:', err);
+    return NextResponse.json({ error: err?.message ?? 'Internal Server Error' }, { status: 500 });
+  }
+}
+
+async function runScanForUser(userId: string, startTime: number): Promise<NextResponse> {
   try {
     const config = await prisma.tradingConfig.findUnique({ where: { userId } });
 
@@ -171,18 +206,12 @@ export async function POST() {
     const featuresMap = await computeBatchFeatures(marketData, historyMap);
 
     // ═══════════════════════════════════════
-    // STEP 3: REGIME + BREADTH ANALYSIS
+    // STEP 3: MARKET REGIME AGENT
     // ═══════════════════════════════════════
-    const regime = detectMarketRegime(marketData);
-    const breadth = analyzeMarketBreadth(marketData);
-    const breadthMult = getBreadthSizingMultiplier(breadth);
-
-    await logTradingEvent('INFO', 'REGIME',
-      `Regime: ${regime.regime} (${regime.confidence}%) | Breadth: ${breadth.signal} (${breadth.bullishScore}/100)`
-    );
+    const regimeResult = await runRegimeAgent(marketData, historyMap);
 
     // ═══════════════════════════════════════
-    // STEP 4: SIGNAL GENERATION
+    // STEP 4: CLOSE-LOOP SIGNAL AGENT
     // ═══════════════════════════════════════
     const enabledStrategies = {
       momentum: config?.enableMomentum !== false,
@@ -194,248 +223,255 @@ export async function POST() {
       emaCross: config?.enableEMACross !== false,
     };
 
-    let rawSignals = runAllStrategies(marketData, enabledStrategies, historyMap);
+    const strategyWeights = await getStrategyWeightsFromDb(userId);
 
-    // News sentiment
-    if (config?.enableNewsSentiment !== false) {
-      try {
-        const newsSignals = await newsSentimentStrategy([
-          'Nifty continues bullish momentum on FII inflows',
-          'Banking sector leads gains on credit growth data',
-        ], marketData);
-        rawSignals = [...rawSignals, ...(newsSignals ?? [])];
-      } catch { /* non-critical */ }
-    }
-
-    // Regime filter
-    rawSignals = filterSignalsByRegime(rawSignals, regime) as any[];
-
-    // Ensemble voting (min 2 strategies must agree)
-    const votingResults = ensembleVote(rawSignals, 2);
-    const consensusSignals = votingResultsToSignals(votingResults);
-    const signalsToScore = consensusSignals.length > 0 ? consensusSignals : rawSignals.slice(0, 10);
+    const signalResult = await runSignalAgent(marketData, historyMap, {
+      enabledStrategies,
+      minVoteCount: 2,
+      minConfidenceThreshold: 60,
+      enableXGBoost: true,
+      enableNewsSentiment: config?.enableNewsSentiment !== false,
+      newsHeadlines: [
+        'Nifty continues bullish momentum on FII inflows',
+        'Banking sector leads gains on credit growth data',
+      ],
+      apiKey: process.env.ABACUSAI_API_KEY,
+      strategyWeights,
+    });
 
     // ═══════════════════════════════════════
-    // STEP 5: XGBOOST + CONFIDENCE SCORING
+    // STEP 5: RISK MANAGER AGENT
     // ═══════════════════════════════════════
-    const relevantSymbols = new Set(signalsToScore.map(s => s.symbol));
-    const relevantFeatures = new Map(
-      Array.from(featuresMap.entries()).filter(([k]) => relevantSymbols.has(k))
+    const currentPrices = new Map(marketData.map(s => [s.symbol, s.lastPrice]));
+
+    const riskResult = await runRiskManagerAgent(
+      userId,
+      signalResult.signals,
+      regimeResult,
+      featuresMap,
+      currentPrices
     );
 
-    // XGBoost predictions (AbacusAI LLM with local fallback)
-    const xgbResult = await batchPredictXGBoost(
-      relevantFeatures,
-      process.env.ABACUSAI_API_KEY,
-      5
-    ).catch(() => ({ predictions: [], modelVersion: 'fallback', latencyMs: 0 }));
-
-    const xgbMap = new Map(xgbResult.predictions.map(p => [p.symbol, p]));
-
-    // Score confidence for each signal
-    const scoredSignals = signalsToScore
-      .map(signal => {
-        const features = featuresMap.get(signal.symbol);
-        const xgb = xgbMap.get(signal.symbol) ?? null;
-        if (!features) return null;
-
-        const vr = votingResults.find(v => v.symbol === signal.symbol);
-        const scored = scoreConfidence({
-          symbol: signal.symbol,
-          direction: signal.direction,
-          strategy: signal.strategy,
-          rawStrategyConfidence: signal.confidence,
-          voteCount: vr?.voteCount ?? 1,
-          totalStrategies: 8,
-          xgb,
-          regime,
-          features,
-        });
-
-        return { ...signal, confidence: scored.finalScore, _grade: scored.grade, _warnings: scored.warnings };
-      })
-      .filter((s): s is NonNullable<typeof s> => s !== null && s.confidence >= 60)
-      .sort((a, b) => b.confidence - a.confidence)
-      .slice(0, 5);
-
     // ═══════════════════════════════════════
-    // STEP 6: PORTFOLIO RISK CHECK
+    // STEP 6: EXECUTION AGENT
     // ═══════════════════════════════════════
-    const portfolioSnapshot = await getPortfolioRiskSnapshot(userId);
-    const { allowed: portfolioAllowed, reason: portfolioReason } = canAddPosition(portfolioSnapshot);
+    const paperTrading = !await isLiveMode(userId);
+    let executionResult = {
+      executed: [] as any[],
+      failed: [] as any[],
+      paperTrades: [] as any[],
+      totalExecuted: 0,
+      totalFailed: 0,
+      totalCapitalDeployed: 0,
+      timestamp: Date.now()
+    };
 
-    if (!portfolioAllowed) {
-      await logTradingEvent('WARN', 'RISK', `Portfolio risk blocked: ${portfolioReason}`);
+    if (riskResult.sessionAllowed && riskResult.approvedSignals > 0) {
+      const approved = riskResult.approvals.filter(a => a.approved);
+      executionResult = await runExecutionAgent(userId, approved, paperTrading);
     }
 
     // ═══════════════════════════════════════
-    // STEP 7: TRAILING STOP MANAGEMENT
+    // STEP 7: PORTFOLIO MANAGER AGENT
     // ═══════════════════════════════════════
-    const currentPriceMap = new Map(marketData.map(s => [s.symbol, s.lastPrice]));
-    await updateTrailingStops(userId, currentPriceMap, config);
+    const monitorResult = await runPortfolioManagerAgent(
+      userId,
+      currentPrices,
+      paperTrading,
+      config?.stopLossPercent ?? 1.0,
+      config?.squareOffTime ?? '15:10'
+    );
 
     // ═══════════════════════════════════════
-    // STEP 8: EXECUTE SIGNALS
+    // STEP 8: UPDATE DAILY PNL & POSITION LIFECYCLES
     // ═══════════════════════════════════════
-    const executedTrades: any[] = [];
-    const paperTrading = !await isLiveMode(userId);
+    const closedMapped = monitorResult.actions
+      .filter(a => ['STOP_LOSS', 'TARGET_HIT', 'SQUARE_OFF'].includes(a.action))
+      .map(a => ({
+        symbol: a.symbol,
+        reason: a.reason,
+        pnl: a.pnl ?? 0,
+        exitPrice: a.exitPrice ?? 0,
+      }));
 
-    if (portfolioAllowed && scoredSignals.length > 0) {
-      const capital = config?.capitalAmount ?? 10000;
+    if (closedMapped.length > 0) {
+      const todayStr = new Date().toISOString().split('T')[0]!;
+      const today = new Date(todayStr);
+      const totalNewPnl = closedMapped.reduce((s, t) => s + t.pnl, 0);
 
-      // Get performance context for dynamic sizing
-      const recentTrades = await prisma.trade.findMany({
-        where: { userId, status: 'CLOSED' },
-        orderBy: { exitTime: 'desc' },
-        take: 20,
+      await prisma.dailyPnl.upsert({
+        where: { date: today },
+        update: {
+          totalPnl: { increment: totalNewPnl },
+          tradesCount: { increment: closedMapped.length },
+          winCount: { increment: closedMapped.filter(t => t.pnl > 0).length },
+          lossCount: { increment: closedMapped.filter(t => t.pnl <= 0).length },
+        },
+        create: {
+          date: today,
+          totalPnl: totalNewPnl,
+          tradesCount: closedMapped.length,
+          winCount: closedMapped.filter(t => t.pnl > 0).length,
+          lossCount: closedMapped.filter(t => t.pnl <= 0).length,
+        },
       });
-      const recentWinRate = recentTrades.length > 0
-        ? recentTrades.filter((t: any) => (t.pnl ?? 0) > 0).length / recentTrades.length
-        : 0.5;
-      let consecutiveLosses = 0;
-      for (const t of recentTrades) {
-        if ((t.pnl ?? 0) < 0) consecutiveLosses++;
-        else break;
-      }
+    }
 
-      const openCount = await prisma.trade.count({ where: { userId, status: 'OPEN' } });
-      const maxPositions = Math.min(config?.maxPositions ?? 3, 5);
+    // ═══════════════════════════════════════
+    // STEP 9: WRITE PERSISTENT AUDIT TRAILS TO SUPABASE
+    // ═══════════════════════════════════════
+    
+    // Save AgentRun
+    await prisma.agentRun.create({
+      data: {
+        userId,
+        runId: signalResult.runId,
+        action: 'full_pipeline',
+        stage: riskResult.sessionAllowed ? 'complete' : 'blocked',
+        paperTrading,
+        totalRawSignals: signalResult.totalRawSignals,
+        afterEnsemble: signalResult.afterEnsembleFilter,
+        afterConfidence: signalResult.afterConfidenceFilter,
+        approvedSignals: riskResult.approvedSignals,
+        executedSignals: executionResult.totalExecuted,
+        regime: regimeResult.enhancedRegime.regime,
+        macroSignal: regimeResult.enhancedRegime.macroSignal,
+        portfolioHeat: riskResult.portfolioSnapshot.portfolioHeatPct,
+        durationMs: Date.now() - startTime,
+        summary: JSON.stringify({
+          volatilityRegime: regimeResult.enhancedRegime.volatilityRegime,
+          riskGrade: riskResult.portfolioSnapshot.riskGrade,
+          capitalDeployed: executionResult.totalCapitalDeployed,
+        }),
+      },
+    }).catch(err => console.error('AgentRun save failed:', err));
 
-      for (const signal of scoredSignals) {
-        if (openCount + executedTrades.length >= maxPositions) break;
+    // Save AgentDecisions (Signals and Risk Approvals)
+    for (const approval of riskResult.approvals) {
+      await prisma.agentDecision.create({
+        data: {
+          userId,
+          agentName: 'risk_manager',
+          symbol: approval.signal.symbol,
+          direction: approval.signal.direction,
+          decision: approval.approved ? 'APPROVED' : 'REJECTED',
+          reason: approval.reason,
+          confidence: approval.signal.confidenceScore,
+          quantity: approval.approvedQuantity,
+          price: approval.signal.entryPrice,
+          metadata: JSON.stringify({
+            grade: approval.signal.confidenceGrade,
+            warnings: approval.warnings,
+            sizing: approval.sizingDetails,
+          }),
+        },
+      }).catch(err => console.error('Decision save failed:', err));
+    }
 
-        const features = featuresMap.get(signal.symbol);
-        if (!features) continue;
+    // Save AgentDecisions (Executions)
+    for (const t of [...executionResult.executed, ...executionResult.paperTrades]) {
+      await prisma.agentDecision.create({
+        data: {
+          userId,
+          agentName: 'execution_agent',
+          symbol: t.symbol,
+          direction: t.direction,
+          decision: 'EXECUTED',
+          reason: t.reason,
+          confidence: t.slippagePct,
+          quantity: t.quantity,
+          price: t.actualPrice ?? t.entryPrice,
+          metadata: JSON.stringify({
+            orderId: t.orderId,
+            paperTrade: t.paperTrade,
+            slippagePct: t.slippagePct,
+          }),
+        },
+      }).catch(err => console.error('Execution decision save failed:', err));
+    }
 
-        // Dynamic risk sizing
-        const sizing = calculateDynamicRiskSize({
-          capital,
-          entryPrice: signal.entryPrice,
-          stopLoss: signal.stopLoss,
-          direction: signal.direction,
-          baseRiskPercent: 1.0,
-          maxPositionPercent: 15,
-          features,
-          regime: regime as any,
-          breadth,
-          recentWinRate,
-          consecutiveLosses,
-          openPositions: openCount + executedTrades.length,
-          maxPositions,
-          portfolioHeat: portfolioSnapshot.portfolioHeatPct / 100,
-        });
-
-        // Apply breadth multiplier
-        const finalQty = Math.max(1, Math.round(sizing.quantity * breadthMult));
-
-        // Slippage check
-        const slippage = estimateSlippage({
-          symbol: signal.symbol,
-          entryPrice: signal.entryPrice,
-          targetPrice: signal.target,
-          stopLoss: signal.stopLoss,
-          direction: signal.direction,
-          quantity: finalQty,
-          avgVolume: features.volumeMA20 ?? 100000,
-          currentVolume: features.volume,
-          atrPct: features.atrPct,
-          isLargeCapProxy: signal.entryPrice > 500,
-        });
-
-        if (!slippage.tradeable) {
-          await logTradingEvent('WARN', 'SLIPPAGE', `${signal.symbol}: ${slippage.reason}`);
-          continue;
-        }
-
-        // Create trade record in Supabase
-        const trade = await prisma.trade.create({
+    // Save AgentDecisions (Portfolio Actions: stops/targets/trailing stops)
+    for (const action of monitorResult.actions) {
+      if (action.action !== 'HOLD') {
+        await prisma.agentDecision.create({
           data: {
             userId,
-            symbol: signal.symbol,
-            exchange: signal.exchange ?? 'NSE',
-            segment: 'EQUITY',
-            direction: signal.direction,
-            quantity: finalQty,
-            entryPrice: signal.entryPrice,
-            stopLoss: signal.stopLoss,
-            target: signal.target,
-            strategy: signal.strategy,
-            status: 'OPEN',
-            notes: paperTrading
-              ? `[PAPER] Grade: ${(signal as any)._grade} | Confidence: ${signal.confidence.toFixed(0)}%`
-              : `Grade: ${(signal as any)._grade} | Confidence: ${signal.confidence.toFixed(0)}%`,
+            agentName: 'portfolio_manager',
+            symbol: action.symbol,
+            decision: action.action === 'TRAILING_STOP' ? 'TRAILING_UPDATED' : 'CLOSED',
+            reason: action.reason,
+            quantity: 0,
+            price: action.exitPrice ?? null,
+            metadata: JSON.stringify({
+              tradeId: action.tradeId,
+              pnl: action.pnl,
+            }),
           },
-        });
-
-        // Live broker execution
-        if (!paperTrading) {
-          await executeLiveTrade(signal, finalQty, userId, config, trade.id);
-        }
-
-        executedTrades.push({
-          tradeId: trade.id,
-          symbol: signal.symbol,
-          direction: signal.direction,
-          quantity: finalQty,
-          entryPrice: signal.entryPrice,
-          stopLoss: signal.stopLoss,
-          target: signal.target,
-          confidence: signal.confidence,
-          grade: (signal as any)._grade,
-          paperTrade: paperTrading,
-        });
-
-        await logTradingEvent('INFO', 'EXECUTION',
-          `${paperTrading ? '[PAPER] ' : ''}${signal.direction} ${finalQty}x ${signal.symbol} @ ₹${signal.entryPrice} | Grade: ${(signal as any)._grade} | SL: ₹${signal.stopLoss} | T: ₹${signal.target}`,
-          { tradeId: trade.id, confidence: signal.confidence, sizing: sizing.reasoning }
-        );
-
-        // Send notifications
-        sendTradeEntryAlert({
-          symbol: signal.symbol,
-          direction: signal.direction,
-          quantity: finalQty,
-          entryPrice: signal.entryPrice,
-          stopLoss: signal.stopLoss,
-          target: signal.target,
-          strategy: signal.strategy,
-        }).catch(() => {});
+        }).catch(err => console.error('Portfolio action decision save failed:', err));
       }
     }
 
-    // ═══════════════════════════════════════
-    // STEP 9: CHECK OPEN POSITIONS (SL/Target)
-    // ═══════════════════════════════════════
-    const closedPositions = await checkAndClosePositions(userId, currentPriceMap, paperTrading);
+    // Save PortfolioSnapshot
+    await prisma.portfolioSnapshot.create({
+      data: {
+        userId,
+        totalCapital: riskResult.portfolioSnapshot.totalCapital,
+        usedCapital: riskResult.portfolioSnapshot.usedCapital,
+        portfolioHeatPct: riskResult.portfolioSnapshot.portfolioHeatPct,
+        unrealizedPnl: riskResult.portfolioSnapshot.unrealizedPnl,
+        totalPositions: riskResult.portfolioSnapshot.totalPositions,
+        riskGrade: riskResult.portfolioSnapshot.riskGrade,
+        riskScore: riskResult.portfolioSnapshot.riskScore,
+        sectorConcentration: JSON.stringify(riskResult.portfolioSnapshot.sectorConcentration),
+        alerts: JSON.stringify(riskResult.portfolioSnapshot.alerts),
+      },
+    }).catch(err => console.error('PortfolioSnapshot save failed:', err));
 
-    // ═══════════════════════════════════════
-    // STEP 10: LOG AGENT RUN TO SUPABASE
-    // ═══════════════════════════════════════
-    await logTradingEvent('INFO', 'AGENT_ORCHESTRATOR',
-      `Scan complete: ${rawSignals.length} raw → ${votingResults.length} consensus → ${scoredSignals.length} scored → ${executedTrades.length} executed | ${closedPositions.length} positions closed`,
-      {
-        regime: regime.regime,
-        breadthSignal: breadth.signal,
-        dataSource,
-        paperTrading,
-        durationMs: Date.now() - startTime,
-        xgbPredictions: xgbResult.predictions.length,
-        killSwitchLevel: drawdownStatus.level,
-      }
-    );
+    // Map executed trades to response format
+    const executedTradesMapped = [...executionResult.executed, ...executionResult.paperTrades].map(t => ({
+      tradeId: t.tradeId,
+      symbol: t.symbol,
+      direction: t.direction,
+      quantity: t.quantity,
+      entryPrice: t.actualPrice ?? t.entryPrice,
+      stopLoss: t.stopLoss,
+      target: t.target,
+      confidence: 80, // legacy fallback for UI display
+      grade: 'A',
+      paperTrade: t.paperTrade,
+    }));
 
     return NextResponse.json({
-      signals: scoredSignals,
-      executed: executedTrades,
-      closed: closedPositions,
-      regime: { regime: regime.regime, confidence: regime.confidence, description: regime.description },
-      breadth: { signal: breadth.signal, bullishScore: breadth.bullishScore, advancing: breadth.advancing, declining: breadth.declining },
+      signals: signalResult.signals.map(s => ({
+        symbol: s.symbol,
+        direction: s.direction,
+        entryPrice: s.entryPrice,
+        stopLoss: s.stopLoss,
+        target: s.target,
+        strategy: s.strategy,
+        confidence: s.confidenceScore,
+        _grade: s.confidenceGrade,
+        _warnings: s.warnings,
+      })),
+      executed: executedTradesMapped,
+      closed: closedMapped,
+      regime: {
+        regime: regimeResult.enhancedRegime.regime,
+        confidence: regimeResult.enhancedRegime.confidence,
+        description: regimeResult.enhancedRegime.description
+      },
+      breadth: {
+        signal: regimeResult.enhancedRegime.breadth.signal,
+        bullishScore: regimeResult.enhancedRegime.breadth.bullishScore,
+        advancing: regimeResult.enhancedRegime.breadth.advancing,
+        declining: regimeResult.enhancedRegime.breadth.declining
+      },
       risk: {
-        drawdownLevel: drawdownStatus.level,
-        dailyPnl: drawdownStatus.dailyPnl,
-        portfolioHeat: portfolioSnapshot.portfolioHeatPct,
-        riskGrade: portfolioSnapshot.riskGrade,
-        canOpenPositions: portfolioAllowed,
+        drawdownLevel: riskResult.drawdownStatus.level,
+        dailyPnl: riskResult.drawdownStatus.dailyPnl,
+        portfolioHeat: riskResult.portfolioSnapshot.portfolioHeatPct,
+        riskGrade: riskResult.portfolioSnapshot.riskGrade,
+        canOpenPositions: riskResult.sessionAllowed,
       },
       marketData: marketData.slice(0, 10).map(d => ({
         symbol: d.symbol,
@@ -443,7 +479,7 @@ export async function POST() {
         changePct: d.changePct,
         volume: d.volume,
       })),
-      marketSnapshot: marketData, // For breadth/agents panels
+      marketSnapshot: marketData,
       niftyPrice: marketData.find(d => d.symbol?.includes('NIFTY'))?.lastPrice ?? marketData.reduce((s, d) => s + d.lastPrice, 0) / (marketData.length || 1),
       dataSource,
       paperTrading,
@@ -525,116 +561,7 @@ async function executeLiveTrade(
   }
 }
 
-async function updateTrailingStops(
-  userId: string,
-  currentPrices: Map<string, number>,
-  config: any
-): Promise<void> {
-  try {
-    const openTrades = await prisma.trade.findMany({ where: { userId, status: 'OPEN' } });
-    for (const trade of openTrades) {
-      const currentPrice = currentPrices.get(trade.symbol)
-        ?? currentPrices.get(`NSE:${trade.symbol}`)
-        ?? currentPrices.get(trade.symbol.replace('NSE:', ''));
-      if (!currentPrice) continue;
 
-      const result = calculateTrailingStop({
-        initialStopLoss: trade.stopLoss,
-        entryPrice: trade.entryPrice,
-        direction: trade.direction as 'BUY' | 'SELL',
-        currentPrice,
-        trailingPercent: config?.stopLossPercent ?? 1.0,
-      });
-
-      if (result.updated && result.newStopLoss !== trade.stopLoss) {
-        await prisma.trade.update({ where: { id: trade.id }, data: { stopLoss: result.newStopLoss } });
-        await logTradingEvent('INFO', 'TRAILING_SL',
-          `${trade.symbol}: SL ${trade.direction === 'BUY' ? '↑' : '↓'} ₹${trade.stopLoss.toFixed(2)} → ₹${result.newStopLoss.toFixed(2)} (locked ₹${result.profitLocked.toFixed(2)})`
-        );
-      }
-    }
-  } catch { /* non-critical */ }
-}
-
-async function checkAndClosePositions(
-  userId: string,
-  currentPrices: Map<string, number>,
-  paperTrading: boolean
-): Promise<any[]> {
-  const closed: any[] = [];
-  try {
-    const openTrades = await prisma.trade.findMany({ where: { userId, status: 'OPEN' } });
-
-    for (const trade of openTrades) {
-      const currentPrice = currentPrices.get(trade.symbol)
-        ?? currentPrices.get(`NSE:${trade.symbol}`)
-        ?? currentPrices.get(trade.symbol.replace('NSE:', ''));
-      if (!currentPrice) continue;
-
-      const isBuy = trade.direction === 'BUY';
-      let reason = '';
-      let shouldClose = false;
-
-      if (isBuy && currentPrice <= trade.stopLoss) {
-        reason = `SL hit @ ₹${trade.stopLoss}`;
-        shouldClose = true;
-      } else if (!isBuy && currentPrice >= trade.stopLoss) {
-        reason = `SL hit @ ₹${trade.stopLoss}`;
-        shouldClose = true;
-      } else if (isBuy && currentPrice >= trade.target) {
-        reason = `Target hit @ ₹${trade.target}`;
-        shouldClose = true;
-      } else if (!isBuy && currentPrice <= trade.target) {
-        reason = `Target hit @ ₹${trade.target}`;
-        shouldClose = true;
-      }
-
-      if (shouldClose) {
-        const pnl = isBuy
-          ? (currentPrice - trade.entryPrice) * trade.quantity
-          : (trade.entryPrice - currentPrice) * trade.quantity;
-
-        await prisma.trade.update({
-          where: { id: trade.id },
-          data: { status: 'CLOSED', exitPrice: currentPrice, pnl, exitTime: new Date() },
-        });
-
-        await logTradingEvent(pnl >= 0 ? 'INFO' : 'WARN', 'POSITION_CLOSE',
-          `${paperTrading ? '[PAPER] ' : ''}${trade.symbol} CLOSED: ${reason} | P&L: ₹${pnl.toFixed(2)}`
-        );
-
-        closed.push({ symbol: trade.symbol, reason, pnl, exitPrice: currentPrice });
-      }
-    }
-
-    // Update daily P&L in Supabase
-    if (closed.length > 0) {
-      const todayStr = new Date().toISOString().split('T')[0]!;
-      const today = new Date(todayStr);
-      const totalNewPnl = closed.reduce((s, t) => s + t.pnl, 0);
-
-      await prisma.dailyPnl.upsert({
-        where: { date: today },
-        update: {
-          totalPnl: { increment: totalNewPnl },
-          tradesCount: { increment: closed.length },
-          winCount: { increment: closed.filter(t => t.pnl > 0).length },
-          lossCount: { increment: closed.filter(t => t.pnl <= 0).length },
-        },
-        create: {
-          date: today,
-          totalPnl: totalNewPnl,
-          tradesCount: closed.length,
-          winCount: closed.filter(t => t.pnl > 0).length,
-          lossCount: closed.filter(t => t.pnl <= 0).length,
-        },
-      });
-    }
-  } catch (e: any) {
-    await logTradingEvent('ERROR', 'POSITION_CHECK', `Position check error: ${e?.message}`).catch(() => {});
-  }
-  return closed;
-}
 
 async function autoSquareOff(userId: string, reason: string): Promise<void> {
   try {

@@ -9,6 +9,7 @@ interface Strategy {
   enabled: boolean;
   signals: number;
   trades: number;
+  weight?: number;
 }
 
 const strategyIcons: Record<string, any> = {
@@ -50,30 +51,48 @@ export function StrategyPanel({ strategies }: { strategies: Strategy[] }) {
             const IconComponent = strategyIcons[strategy?.name ?? ''] ?? Zap;
             return (
               <Card key={i} className={`transition-all duration-normal hover:shadow-md ${strategy?.enabled ? '' : 'opacity-50'}`}>
-                <CardContent className="pt-4 pb-4 px-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-                        <IconComponent className="w-4 h-4 text-primary" />
+                <CardContent className="pt-4 pb-4 px-4 flex flex-col justify-between h-full min-h-[140px]">
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                          <IconComponent className="w-4 h-4 text-primary" />
+                        </div>
+                        <span className="font-display font-semibold text-sm">{strategy?.name ?? 'Unknown'}</span>
                       </div>
-                      <span className="font-display font-semibold text-sm">{strategy?.name ?? 'Unknown'}</span>
+                      <Badge variant={strategy?.enabled ? 'default' : 'secondary'} className="text-xs">
+                        {strategy?.enabled ? 'Active' : 'Disabled'}
+                      </Badge>
                     </div>
-                    <Badge variant={strategy?.enabled ? 'default' : 'secondary'} className="text-xs">
-                      {strategy?.enabled ? 'Active' : 'Disabled'}
-                    </Badge>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      {strategyDescriptions[strategy?.name ?? ''] ?? 'Trading strategy'}
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    {strategyDescriptions[strategy?.name ?? ''] ?? 'Trading strategy'}
-                  </p>
-                  <div className="flex items-center gap-4 text-xs">
-                    <div>
-                      <span className="text-muted-foreground">Signals: </span>
-                      <span className="font-mono font-bold">{strategy?.signals ?? 0}</span>
+                  <div className="flex items-center justify-between text-xs pt-2 border-t border-border/30">
+                    <div className="flex items-center gap-3">
+                      <div>
+                        <span className="text-muted-foreground">Signals: </span>
+                        <span className="font-mono font-bold">{strategy?.signals ?? 0}</span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Trades: </span>
+                        <span className="font-mono font-bold">{strategy?.trades ?? 0}</span>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">Trades: </span>
-                      <span className="font-mono font-bold">{strategy?.trades ?? 0}</span>
-                    </div>
+                    {strategy?.weight !== undefined && (
+                      <Badge 
+                        variant="outline" 
+                        className={`font-mono text-[10px] py-0 px-1.5 transition-all ${
+                          strategy.weight > 1.05 
+                            ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/5' 
+                            : strategy.weight < 0.95 
+                            ? 'border-red-500/30 text-red-400 bg-red-500/5' 
+                            : 'text-muted-foreground border-border/50'
+                        }`}
+                      >
+                        wt: {strategy.weight.toFixed(2)}x
+                      </Badge>
+                    )}
                   </div>
                 </CardContent>
               </Card>

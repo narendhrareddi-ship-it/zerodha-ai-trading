@@ -50,6 +50,18 @@ export function getStrategyWeights(): Record<string, number> {
   return { ...strategyWeights };
 }
 
+export async function getStrategyWeightsFromDb(userId: string): Promise<Record<string, number>> {
+  try {
+    const record = await prisma.confidenceWeights.findUnique({ where: { userId } });
+    if (record?.weights) {
+      return { ...strategyWeights, ...JSON.parse(record.weights) };
+    }
+  } catch (err) {
+    console.error('Failed to load strategy weights from DB:', err);
+  }
+  return { ...strategyWeights };
+}
+
 /**
  * Run the Self-Learning Agent after market close
  */
@@ -60,6 +72,9 @@ export async function runSelfLearningAgent(
 ): Promise<SelfLearningResult> {
   const today = new Date().toISOString().split('T')[0]!;
   const todayStart = new Date(today);
+
+  // Load weights from database
+  const activeWeights = await getStrategyWeightsFromDb(userId);
 
   // 1. Get today's closed trades
   const todayTrades = await prisma.trade.findMany({
@@ -80,7 +95,7 @@ export async function runSelfLearningAgent(
 
   // Strategy performance analysis
   for (const [strategy, stats] of Object.entries(attribution.byStrategy)) {
-    const currentWeight = strategyWeights[strategy] ?? 1.0;
+    const currentWeight = activeWeights[strategy] ?? 1.0;
     let newWeight = currentWeight;
     let reason = '';
 
@@ -109,7 +124,7 @@ export async function runSelfLearningAgent(
       }
 
       if (newWeight !== currentWeight) {
-        strategyWeights[strategy] = newWeight;
+        activeWeights[strategy] = newWeight;
         weightUpdates.push({
           strategy,
           previousWeight: Math.round(currentWeight * 100) / 100,
@@ -156,8 +171,29 @@ export async function runSelfLearningAgent(
     });
   }
 
+  // Save weights to database
+  await prisma.confidenceWeights.upsert({
+    where: { userId },
+    update: { weights: JSON.stringify(activeWeights) },
+    create: { userId, weights: JSON.stringify(activeWeights) },
+  });
+
   // 4. Walk-forward re-optimization (weekly trigger — on Fridays or every 5th learning run)
   const walkForwardTriggered = new Date().getDay() === 5; // Friday
+
+  // Create LearningEvent record
+  await prisma.learningEvent.create({
+    data: {
+      userId,
+      date: today,
+      totalTradesAnalyzed,
+      dailyPnl: Math.round(dailyPnl * 100) / 100,
+      winRate: Math.round(winRate * 100) / 100,
+      weightUpdates: JSON.stringify(weightUpdates),
+      insights: JSON.stringify(insights),
+      walkForwardTriggered,
+    },
+  });
 
   // 5. Build performance report
   const performanceReport = buildPerformanceReport(

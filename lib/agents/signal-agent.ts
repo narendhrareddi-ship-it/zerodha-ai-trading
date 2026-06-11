@@ -20,6 +20,7 @@ export interface SignalAgentConfig {
   enableNewsSentiment: boolean;
   newsHeadlines?: string[];
   apiKey?: string;
+  strategyWeights?: Record<string, number>;
 }
 
 export interface AgentSignal extends TradeSignal {
@@ -127,6 +128,7 @@ export async function runSignalAgent(
       xgb,
       regime,
       features,
+      strategyWeights: config.strategyWeights,
     });
 
     if (scored.finalScore < config.minConfidenceThreshold) continue;

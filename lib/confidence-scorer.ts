@@ -133,16 +133,36 @@ export function scoreConfidence(params: {
   regime: RegimeAnalysis;
   features: FeatureVector;
   newsSentimentScore?: number;    // -1 to 1 (negative=bearish, positive=bullish)
+  strategyWeights?: Record<string, number>;
 }): ConfidenceResult {
   const {
     symbol, direction, strategy, rawStrategyConfidence,
-    voteCount, totalStrategies, xgb, regime, features, newsSentimentScore
+    voteCount, totalStrategies, xgb, regime, features, newsSentimentScore, strategyWeights
   } = params;
+
+  // Apply learned strategy weights if available
+  let weightMultiplier = 1.0;
+  if (strategyWeights) {
+    const parts = strategy.split('+');
+    let totalWeight = 0;
+    let counted = 0;
+    for (const p of parts) {
+      const cleanPart = p.toUpperCase().replace(/[\s_]+/g, '_');
+      const w = strategyWeights[cleanPart] ?? strategyWeights[p.toUpperCase()] ?? 1.0;
+      totalWeight += w;
+      counted++;
+    }
+    if (counted > 0) {
+      weightMultiplier = totalWeight / counted;
+    }
+  }
+
+  const scaledStrategyConfidence = Math.min(100, Math.max(0, rawStrategyConfidence * weightMultiplier));
 
   // 1. Ensemble score (0-30) — based on vote consensus
   const voteRatio = voteCount / Math.max(1, totalStrategies);
   const ensembleScore = Math.min(30, Math.round(
-    (rawStrategyConfidence / 100) * 15 + voteRatio * 15
+    (scaledStrategyConfidence / 100) * 15 + voteRatio * 15
   ));
 
   // 2. XGBoost score (0-25)

@@ -47,6 +47,27 @@ export async function POST(request: Request) {
       confidence: 0.95,
     });
 
+    // Save simulation results to database
+    await prisma.monteCarloResult.create({
+      data: {
+        userId,
+        simulations,
+        tradingDays,
+        initialCapital: capital,
+        meanReturn: result.meanReturn,
+        medianReturn: result.medianReturn,
+        p5Return: result.p5Return,
+        p95Return: result.p95Return,
+        var95: result.var95,
+        cvar95: result.cvar95,
+        maxDrawdownMean: result.maxDrawdownMean,
+        maxDrawdownWorst: result.maxDrawdownWorst,
+        probabilityOfProfit: result.probabilityOfProfit,
+        probabilityOfRuin: result.probabilityOfRuin,
+        probabilityOfDoubling: result.probabilityOfDoubling,
+      },
+    }).catch(err => console.error('Failed to save MonteCarloResult:', err));
+
     return NextResponse.json({ result, historicalTradesUsed: closedTrades.length });
   } catch (err: any) {
     return NextResponse.json({ error: err?.message }, { status: 500 });

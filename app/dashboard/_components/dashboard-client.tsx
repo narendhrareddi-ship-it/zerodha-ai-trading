@@ -273,7 +273,7 @@ export function DashboardClient() {
               forceMount is NOT used — inactive tabs are unmounted.
               ═══════════════════════════════════════════════════════ */}
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="flex w-full overflow-x-auto">
+            <TabsList className="flex w-full overflow-x-auto scrollbar-hide">
               <TabsTrigger value="agents">🤖 Agents</TabsTrigger>
               <TabsTrigger value="intelligence">🧠 Intelligence</TabsTrigger>
               <TabsTrigger value="positions">Positions</TabsTrigger>
