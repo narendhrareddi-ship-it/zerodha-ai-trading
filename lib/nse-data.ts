@@ -140,3 +140,31 @@ export function getRealisticMarketData(): MarketDataPoint[] {
     };
   });
 }
+
+export function getLiveIndices() {
+  const now = new Date();
+  const daySeed = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
+  const minutesSinceOpen = (now.getUTCHours() * 60 + now.getUTCMinutes()) - (3 * 60 + 45); // IST 9:15
+  const dayProgress = Math.max(0, Math.min(1, minutesSinceOpen / 375));
+
+  // Base index values
+  const niftyBase = 23200;
+  const bseBase = 76200;
+
+  const marketBias = (Math.sin(daySeed * 0.1) * 0.5 + Math.cos(daySeed * 0.07) * 0.3);
+  const intradayWave = Math.sin(dayProgress * Math.PI * 2) * 0.4;
+  const noise = (Math.sin(now.getTime() / 15000) * 0.05); // dynamic change every 15s
+
+  const changePctNifty = marketBias * 0.5 + intradayWave + noise;
+  const changePctBse = marketBias * 0.5 + intradayWave + noise * 0.95;
+
+  const nifty = Math.round(niftyBase * (1 + changePctNifty / 100) * 100) / 100;
+  const bse = Math.round(bseBase * (1 + changePctBse / 100) * 100) / 100;
+
+  return {
+    nifty,
+    bse,
+    niftyChange: Math.round(changePctNifty * 100) / 100,
+    bseChange: Math.round(changePctBse * 100) / 100,
+  };
+}

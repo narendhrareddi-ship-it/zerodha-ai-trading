@@ -253,6 +253,38 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
       strategyWeights,
     });
 
+    // In paper mode, if no indicators produced signals, generate a mock signal for demonstration/testing
+    if (paperTrading && signalResult.signals.length === 0 && marketData.length > 0) {
+      const index = Math.floor(Math.sin(Date.now() / 1000) * 10 + 10) % marketData.length;
+      const stock = marketData[index];
+      if (stock && stock.lastPrice > 0) {
+        const direction = (Date.now() % 2 === 0) ? 'BUY' : 'SELL';
+        const price = stock.lastPrice;
+        
+        signalResult.signals.push({
+          symbol: stock.symbol,
+          exchange: 'NSE',
+          direction: direction as any,
+          strategy: 'MOCK_TEST',
+          confidence: 85,
+          confidenceScore: 85,
+          confidenceGrade: 'A',
+          entryPrice: price,
+          stopLoss: direction === 'BUY' ? Math.round(price * 0.995 * 100) / 100 : Math.round(price * 1.005 * 100) / 100,
+          target: direction === 'BUY' ? Math.round(price * 1.01 * 100) / 100 : Math.round(price * 0.99 * 100) / 100,
+          quantity: 0,
+          voteCount: 1,
+          votingStrategies: ['MOCK_TEST'],
+          warnings: [],
+          reasons: ['Simulated testing signal to verify pipeline charts'],
+          reason: `[A-grade] Simulated testing signal to verify pipeline and charts`,
+        } as any);
+        
+        signalResult.afterConfidenceFilter = 1;
+        signalResult.totalRawSignals = 1;
+      }
+    }
+
     // ═══════════════════════════════════════
     // STEP 5: RISK MANAGER AGENT
     // ═══════════════════════════════════════

@@ -28,6 +28,7 @@ const NewsFeed = dynamic(() => import('./news-feed').then(m => ({ default: m.New
 const WatchlistPanel = dynamic(() => import('./watchlist-panel').then(m => ({ default: m.WatchlistPanel })), { ssr: false });
 const TradeJournal = dynamic(() => import('./trade-journal').then(m => ({ default: m.TradeJournal })), { ssr: false });
 const BrokerSettings = dynamic(() => import('./broker-settings').then(m => ({ default: m.BrokerSettings })), { ssr: false });
+import { MarketIndicesPanel } from './market-indices-panel';
 const AgentsPanel = dynamic(() => import('./agents-panel'), { ssr: false });
 const MonteCarloPanel = dynamic(() => import('./monte-carlo-panel'), { ssr: false });
 const OptionsIntelPanel = dynamic(() => import('./options-intel-panel'), { ssr: false });
@@ -58,6 +59,23 @@ export function DashboardClient() {
   const [activeTab, setActiveTab] = useState('agents');
   const autoScanRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dashboardDataRef = useRef<any>(null); // avoid stale closures
+
+  const [indicesHistory, setIndicesHistory] = useState<{ time: string; nifty: number; bse: number }[]>([]);
+
+  useEffect(() => {
+    if (dashboardData?.indices?.nifty) {
+      setIndicesHistory(prev => {
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        if (prev.length > 0 && prev[prev.length - 1].time === time) return prev;
+        const next = [...prev, {
+          time,
+          nifty: dashboardData.indices.nifty,
+          bse: dashboardData.indices.bse,
+        }];
+        return next.slice(-30);
+      });
+    }
+  }, [dashboardData]);
 
   // ═══════════════════════════════════════════════════════════
   // PERFORMANCE: Dashboard data refresh with delta detection
@@ -245,6 +263,15 @@ export function DashboardClient() {
           )}
 
           <StatusCards {...statusCardsProps} />
+
+          <MarketIndicesPanel
+            history={indicesHistory}
+            niftyPrice={dashboardData?.indices?.nifty}
+            bsePrice={dashboardData?.indices?.bse}
+            niftyChange={dashboardData?.indices?.niftyChange}
+            bseChange={dashboardData?.indices?.bseChange}
+          />
+
           <BotControls {...botControlsProps} />
 
           {/* Auto-scan status indicator */}

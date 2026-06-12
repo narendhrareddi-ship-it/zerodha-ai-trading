@@ -138,9 +138,13 @@ export async function GET() {
     // Load strategy weights
     const weights = await getStrategyWeightsFromDb(userId);
 
+    const { getLiveIndices } = await import('@/lib/nse-data');
+    const indices = getLiveIndices();
+
     return NextResponse.json({
       botStatus: botSession?.status ?? 'STOPPED',
       dailyPnl,
+      indices,
       openPositions: openTrades?.length ?? 0,
       totalTrades: todayTrades?.length ?? 0,
       winRate,
