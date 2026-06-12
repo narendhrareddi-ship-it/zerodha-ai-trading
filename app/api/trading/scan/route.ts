@@ -134,7 +134,11 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
           dataSource = 'kite';
         }
       } catch (e: any) {
-        await logTradingEvent('WARN', 'DATA', `Kite data failed: ${e?.message}`);
+        const isPermissionError = e?.message?.includes('403') || e?.message?.includes('Permission');
+        const friendlyMsg = isPermissionError
+          ? 'Kite Connect quote API subscription inactive; automatically falling back to free public NSE live quotes (Order execution remains live)'
+          : `Kite data failed: ${e?.message}`;
+        await logTradingEvent('WARN', 'DATA', friendlyMsg);
       }
     }
 
