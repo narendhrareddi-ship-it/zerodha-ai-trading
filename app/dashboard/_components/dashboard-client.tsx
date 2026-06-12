@@ -94,7 +94,9 @@ export function DashboardClient() {
           prev.openPositions !== data.openPositions ||
           prev.totalTrades !== data.totalTrades ||
           prev.botStatus !== data.botStatus ||
-          prev.winRate !== data.winRate;
+          prev.winRate !== data.winRate ||
+          prev.indices?.nifty !== data.indices?.nifty ||
+          prev.indices?.bse !== data.indices?.bse;
         if (changed) {
           dashboardDataRef.current = data;
           setDashboardData(data);

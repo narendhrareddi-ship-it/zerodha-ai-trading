@@ -88,7 +88,15 @@ export async function runRiskManagerAgent(
 
   // 5. Get user performance stats for dynamic sizing
   const config = await prisma.tradingConfig.findUnique({ where: { userId } });
-  const capital = config?.capitalAmount ?? 10000;
+  
+  let capital = config?.capitalAmount ?? 10000;
+  const isLive = await checkIsLive(userId, config);
+  if (isLive) {
+    const realBalance = await getRealBrokerBalance(userId, config);
+    if (realBalance !== null && realBalance > 0) {
+      capital = realBalance;
+    }
+  }
 
   const recentTrades = await prisma.trade.findMany({
     where: { userId, status: 'CLOSED' },
@@ -242,4 +250,71 @@ export async function runRiskManagerAgent(
     rejectedSignals: approvals.filter(a => !a.approved).length,
     timestamp: Date.now(),
   };
+}
+
+// ─── HELPERS FOR LIVE CAPITAL BALANCE ───
+async function checkIsLive(userId: string, config: any): Promise<boolean> {
+  try {
+    if (!config) return false;
+    const brokerType = config.brokerType ?? 'kite';
+    if (brokerType === 'kite') {
+      const token = await prisma.kiteToken.findFirst({
+        where: { userId, expiresAt: { gt: new Date() } },
+        orderBy: { createdAt: 'desc' },
+      });
+      return !!token;
+    }
+    if (brokerType === 'fyers') {
+      return !!(config.fyersAppId && config.fyersToken);
+    }
+    if (brokerType === 'kotak') {
+      return !!(config.kotakConsumerKey && config.kotakToken);
+    }
+    if (brokerType === 'openalgo') {
+      return !!config.openalgoApiKey;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function getRealBrokerBalance(userId: string, config: any): Promise<number | null> {
+  try {
+    const brokerType = config?.brokerType ?? 'kite';
+    if (brokerType === 'kite') {
+      const { getUserKiteClient } = await import('../kite');
+      const { client } = await getUserKiteClient(userId);
+      if (client) {
+        const margins = await client.getMargins();
+        const equityCash = margins?.data?.equity?.available?.cash ?? margins?.data?.equity?.net ?? null;
+        if (equityCash !== null) return Number(equityCash);
+      }
+    }
+    if (brokerType === 'fyers' && config.fyersAppId && config.fyersToken) {
+      const { FyersClient } = await import('../fyers');
+      const fyers = new FyersClient({ appId: config.fyersAppId, accessToken: config.fyersToken });
+      const funds = await fyers.getFunds();
+      if (funds?.fund_limit?.length) {
+        const totalBalance = funds.fund_limit.find((item: any) => 
+          item?.title?.toLowerCase()?.includes('total') || 
+          item?.title?.toLowerCase()?.includes('available') ||
+          item?.id === 1 || item?.id === 10
+        );
+        const amt = totalBalance?.equityAmount ?? funds.fund_limit[0]?.equityAmount;
+        if (amt !== undefined && amt !== null) return Number(amt);
+      }
+    }
+    if (brokerType === 'kotak' && config.kotakConsumerKey && config.kotakToken) {
+      const { KotakNeoClient } = await import('../kotak-neo');
+      const kotak = new KotakNeoClient({ consumerKey: config.kotakConsumerKey, accessToken: config.kotakToken, sessionToken: config.kotakToken });
+      const funds = await kotak.getFunds();
+      const availableMargin = funds?.availableLimit ?? funds?.gpayInBalance ?? null;
+      if (availableMargin !== null) return Number(availableMargin);
+    }
+    return null;
+  } catch (e) {
+    console.error('Failed to fetch real broker balance for risk agent:', e);
+    return null;
+  }
 }
