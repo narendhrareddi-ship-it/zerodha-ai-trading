@@ -36,6 +36,27 @@ export interface RiskManagerResult {
   timestamp: number;
 }
 
+function calculatePearsonCorrelation(x: number[], y: number[]): number {
+  const n = Math.min(x.length, y.length);
+  if (n < 5) return 0;
+  const xs = x.slice(-n);
+  const ys = y.slice(-n);
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+  for (let i = 0; i < n; i++) {
+    const xv = xs[i] ?? 0;
+    const yv = ys[i] ?? 0;
+    sumX += xv;
+    sumY += yv;
+    sumXY += xv * yv;
+    sumX2 += xv * xv;
+    sumY2 += yv * yv;
+  }
+  const num = n * sumXY - sumX * sumY;
+  const den = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
+  if (den === 0) return 0;
+  return num / den;
+}
+
 /**
  * Run the Risk Manager Agent
  */
@@ -44,7 +65,8 @@ export async function runRiskManagerAgent(
   signals: AgentSignal[],
   regimeResult: RegimeAgentResult,
   featuresMap: Map<string, FeatureVector>,
-  currentPrices?: Map<string, number>
+  currentPrices?: Map<string, number>,
+  historyMap?: Map<string, { closes: number[] }>
 ): Promise<RiskManagerResult> {
   // 1. Check drawdown kill-switch
   const drawdownStatus = await checkDrawdownStatus(userId);
@@ -115,8 +137,9 @@ export async function runRiskManagerAgent(
     else break;
   }
 
-  // 6. Get current open positions count
-  const openPositions = await prisma.trade.count({ where: { userId, status: 'OPEN' } });
+  // 6. Get current open positions count and records for correlation checking
+  const openTrades = await prisma.trade.findMany({ where: { userId, status: 'OPEN' } });
+  const openPositions = openTrades.length;
   const maxPositions = Math.min(
     config?.maxPositions ?? 3,
     regimeResult.maxPositions
@@ -193,6 +216,43 @@ export async function runRiskManagerAgent(
         multipliers: { base: 1, regimeMultiplier: 1, volatilityMultiplier: 1, breadthMultiplier: 1, performanceMultiplier: 1, portfolioHeatMultiplier: 1 },
         reasoning: ['Fallback fixed sizing (no feature data)'],
       };
+    }
+
+    // Pearson Correlation-Aware Position Sizing Scaling
+    let maxCorrelation = 0;
+    let correlatedAsset = '';
+    
+    if (historyMap && openTrades.length > 0) {
+      const signalHist = historyMap.get(signal.symbol);
+      if (signalHist && signalHist.closes) {
+        for (const openTrade of openTrades) {
+          const openHist = historyMap.get(openTrade.symbol);
+          if (openHist && openHist.closes) {
+            const corr = Math.abs(calculatePearsonCorrelation(signalHist.closes, openHist.closes));
+            if (corr > maxCorrelation) {
+              maxCorrelation = corr;
+              correlatedAsset = openTrade.symbol;
+            }
+          }
+        }
+      }
+    }
+
+    if (maxCorrelation > 0.65) {
+      warnings.push(`High correlation (${maxCorrelation.toFixed(2)}) with open position in ${correlatedAsset}. Scaling down quantity by 50% to hedge sector risk.`);
+      sizingDetails.quantity = Math.max(1, Math.round(sizingDetails.quantity * 0.5));
+      sizingDetails.capitalAllocated = sizingDetails.quantity * signal.entryPrice;
+      sizingDetails.riskAmount = sizingDetails.quantity * Math.abs(signal.entryPrice - signal.stopLoss);
+    }
+
+    // Volatile market regime protection guard
+    if (regimeResult.enhancedRegime.regime === 'VOLATILE') {
+      approvals.push({
+        signal, approved: false, approvedQuantity: 0,
+        riskAmount: 0, reason: 'Risk manager guard: new entries blocked in VOLATILE market regime',
+        warnings, sizingDetails: {} as any, slippageOk: false,
+      });
+      continue;
     }
 
     // Slippage check

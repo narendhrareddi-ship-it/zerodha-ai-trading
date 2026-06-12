@@ -46,6 +46,7 @@ const strategyWeights: Record<string, number> = {
   XGBOOST: 1.0,
   VWAP_PULLBACK: 1.0,
   VOLUME_BREAKOUT: 1.0,
+  OFI_VSA: 1.0,
 };
 
 export function getStrategyWeights(): Record<string, number> {

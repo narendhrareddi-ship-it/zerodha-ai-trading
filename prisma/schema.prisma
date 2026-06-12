@@ -69,6 +69,7 @@ model TradingConfig {
   enableEMACross    Boolean  @default(true)
   enableVwapPullback Boolean @default(true)
   enableVolBreakout  Boolean @default(true)
+  enableOfiVsa       Boolean @default(true)
   telegramChatId    String?  @default("")
   enableTelegram    Boolean  @default(false)
   kiteApiKey        String?  @default("")

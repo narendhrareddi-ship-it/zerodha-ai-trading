@@ -57,10 +57,15 @@ function isSpreadAcceptable(
 /**
  * Execute via Kite Connect
  */
+/**
+ * Execute via Kite Connect
+ */
 async function executeKite(
   userId: string,
   signal: TradeSignal,
-  quantity: number
+  quantity: number,
+  orderType: 'MARKET' | 'LIMIT' = 'MARKET',
+  price?: number
 ): Promise<{ orderId?: string; price?: number; success: boolean; error?: string }> {
   try {
     const { getUserKiteClient } = await import('./kite');
@@ -72,21 +77,20 @@ async function executeKite(
       exchange: 'NSE',
       transaction_type: signal.direction === 'BUY' ? 'BUY' : 'SELL',
       quantity,
-      order_type: 'MARKET',
+      order_type: orderType,
+      price: orderType === 'LIMIT' ? price : undefined,
       product: 'MIS',             // Intraday
       validity: 'DAY',
     };
 
-   const orderResponse = await client.placeOrder({
-  ...orderParams,
-});
+    const orderResponse = await client.placeOrder(orderParams);
 
-const orderId =
-  orderResponse?.data?.order_id ??
-  orderResponse?.order_id ??
-  orderResponse?.data ??
-  'UNKNOWN';
-    return { orderId: String(orderId), price: signal.entryPrice, success: true };
+    const orderId =
+      orderResponse?.data?.order_id ??
+      orderResponse?.order_id ??
+      orderResponse?.data ??
+      'UNKNOWN';
+    return { orderId: String(orderId), price: price ?? signal.entryPrice, success: true };
   } catch (err: any) {
     return { success: false, error: err?.message ?? 'Kite order failed' };
   }
@@ -98,7 +102,9 @@ const orderId =
 async function executeOpenAlgo(
   signal: TradeSignal,
   quantity: number,
-  config: { openalgoApiKey?: string | null; openalgoHost?: string | null }
+  config: { openalgoApiKey?: string | null; openalgoHost?: string | null },
+  orderType: 'MARKET' | 'LIMIT' = 'MARKET',
+  price?: number
 ): Promise<{ orderId?: string; price?: number; success: boolean; error?: string }> {
   try {
     const { OpenAlgoClient } = await import('./openalgo');
@@ -112,11 +118,12 @@ async function executeOpenAlgo(
       exchange: 'NSE',
       action: signal.direction,
       quantity,
-      pricetype: 'MARKET',
+      pricetype: orderType,
+      price: orderType === 'LIMIT' ? price : undefined,
       product: 'MIS',
     });
 
-    return { orderId: result?.orderid, price: signal.entryPrice, success: !!result?.orderid };
+    return { orderId: result?.orderid, price: price ?? signal.entryPrice, success: !!result?.orderid };
   } catch (err: any) {
     return { success: false, error: err?.message ?? 'OpenAlgo order failed' };
   }
@@ -127,7 +134,9 @@ async function executeOpenAlgo(
  */
 async function routeOrder(
   params: ExecutionParams,
-  quantity: number
+  quantity: number,
+  orderType: 'MARKET' | 'LIMIT' = 'MARKET',
+  price?: number
 ): Promise<{ orderId?: string; price?: number; success: boolean; error?: string }> {
   const { signal, userId, brokerType } = params;
 
@@ -135,16 +144,15 @@ async function routeOrder(
 
   switch (brokerType) {
     case 'kite':
-      return executeKite(userId, signal, quantity);
+      return executeKite(userId, signal, quantity, orderType, price);
 
     case 'openalgo':
       return executeOpenAlgo(signal, quantity, {
         openalgoApiKey: config?.openalgoApiKey,
         openalgoHost: config?.openalgoHost,
-      });
+      }, orderType, price);
 
     case 'fyers': {
-      // Fyers direct order placement
       try {
         const { FyersClient } = await import('./fyers');
         const client = new FyersClient({
@@ -154,12 +162,13 @@ async function routeOrder(
         const result = await client.placeOrder({
           symbol: `NSE:${signal.symbol.replace(/^NSE:/, '')}-EQ`,
           qty: quantity,
-          type: 2, // Market
+          type: orderType === 'LIMIT' ? 1 : 2,
           side: signal.direction === 'BUY' ? 1 : -1,
           productType: 'INTRADAY',
+          limitPrice: orderType === 'LIMIT' ? price : 0,
           validity: 'DAY',
         });
-        return { orderId: result?.id, success: !!result?.id, price: signal.entryPrice };
+        return { orderId: result?.id, success: !!result?.id, price: price ?? signal.entryPrice };
       } catch (err: any) {
         return { success: false, error: err?.message };
       }
@@ -177,12 +186,13 @@ async function routeOrder(
           symbol: formattedSymbol,
           exchange: signal.symbol.startsWith('BSE') ? 'bse_cm' : 'nse_cm',
           transactionType: signal.direction === 'BUY' ? 'B' : 'S',
-          orderType: 'MKT',
+          orderType: orderType === 'LIMIT' ? 'L' : 'MKT',
+          price: orderType === 'LIMIT' ? price : undefined,
           quantity,
           product: 'MIS',
         });
         const orderId = result?.orderId ?? result?.gOrderNo ?? result?.data?.orderId;
-        return { orderId: orderId ? String(orderId) : undefined, success: !!orderId, price: signal.entryPrice };
+        return { orderId: orderId ? String(orderId) : undefined, success: !!orderId, price: price ?? signal.entryPrice };
       } catch (err: any) {
         return { success: false, error: err?.message };
       }
@@ -194,7 +204,136 @@ async function routeOrder(
 }
 
 /**
- * Execute trade with chunking and retry logic
+ * Check order status in real-time
+ */
+async function checkOrderStatus(
+  userId: string,
+  brokerType: 'kite' | 'fyers' | 'openalgo' | 'kotak',
+  orderId: string
+): Promise<'FILLED' | 'PENDING' | 'FAILED'> {
+  try {
+    const config = await prisma.tradingConfig.findUnique({ where: { userId } });
+    if (brokerType === 'kite') {
+      const { getUserKiteClient } = await import('./kite');
+      const { client } = await getUserKiteClient(userId);
+      if (client) {
+        const orders = await client.getOrders();
+        const match = orders?.data?.find((o: any) => String(o.order_id) === orderId);
+        if (match) {
+          if (match.status === 'COMPLETE') return 'FILLED';
+          if (['CANCELLED', 'REJECTED', 'FAILED'].includes(match.status)) return 'FAILED';
+          return 'PENDING';
+        }
+      }
+    } else if (brokerType === 'fyers') {
+      const { FyersClient } = await import('./fyers');
+      const client = new FyersClient({
+        appId: config?.fyersAppId ?? '',
+        accessToken: config?.fyersToken ?? '',
+      });
+      const orders = await client.getOrders();
+      const match = orders?.orderBook?.find((o: any) => String(o.id) === orderId);
+      if (match) {
+        if (match.status === 2) return 'FILLED';
+        if ([1, 5].includes(match.status)) return 'FAILED';
+        return 'PENDING';
+      }
+    } else if (brokerType === 'kotak') {
+      const { KotakNeoClient } = await import('./kotak-neo');
+      const client = new KotakNeoClient({
+        consumerKey: config?.kotakConsumerKey ?? '',
+        accessToken: config?.kotakToken ?? '',
+      });
+      const orders = await client.getOrderBook();
+      const match = orders?.data?.find((o: any) => String(o.orderId) === orderId);
+      if (match) {
+        if (match.orderStatus === 'TRAD') return 'FILLED';
+        if (['CANC', 'REJ'].includes(match.orderStatus)) return 'FAILED';
+        return 'PENDING';
+      }
+    }
+  } catch (err) {
+    console.error('Failed to check order status:', err);
+  }
+  return 'FILLED'; // Default fallback
+}
+
+/**
+ * Cancel a pending limit order
+ */
+async function cancelOrder(
+  userId: string,
+  brokerType: 'kite' | 'fyers' | 'openalgo' | 'kotak',
+  orderId: string
+): Promise<boolean> {
+  try {
+    const config = await prisma.tradingConfig.findUnique({ where: { userId } });
+    if (brokerType === 'kite') {
+      const { getUserKiteClient } = await import('./kite');
+      const { client } = await getUserKiteClient(userId);
+      if (client) {
+        await client.cancelOrder(orderId);
+        return true;
+      }
+    } else if (brokerType === 'fyers') {
+      const { FyersClient } = await import('./fyers');
+      const client = new FyersClient({
+        appId: config?.fyersAppId ?? '',
+        accessToken: config?.fyersToken ?? '',
+      });
+      await client.cancelOrder(orderId);
+      return true;
+    }
+  } catch (err) {
+    console.error('Failed to cancel order:', err);
+  }
+  return false;
+}
+
+/**
+ * Execute LIMIT orders passively with price adjustments and MARKET order fallback
+ */
+async function executePassiveLimitOrder(
+  params: ExecutionParams,
+  quantity: number
+): Promise<{ orderId?: string; price?: number; success: boolean; error?: string }> {
+  const { signal, userId, brokerType } = params;
+  let limitPrice = signal.entryPrice;
+  let orderId = '';
+  let success = false;
+  let attempts = 0;
+  const maxAttempts = 3;
+
+  while (attempts < maxAttempts) {
+    attempts++;
+    const res = await routeOrder(params, quantity, 'LIMIT', limitPrice);
+    if (res.success && res.orderId) {
+      orderId = res.orderId;
+      // Wait 10 seconds for filling passively
+      await new Promise(r => setTimeout(r, 10000));
+      
+      const status = await checkOrderStatus(userId, brokerType, orderId);
+      if (status === 'FILLED') {
+        success = true;
+        return { orderId, price: limitPrice, success: true };
+      }
+      
+      // If pending, cancel order
+      await cancelOrder(userId, brokerType, orderId);
+
+      // Chase market price slightly
+      limitPrice = signal.direction === 'BUY' ? limitPrice * 1.0005 : limitPrice * 0.9995;
+    } else {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  // Final fallback to MARKET order
+  return await routeOrder(params, quantity, 'MARKET');
+}
+
+/**
+ * Execute trade with passive placement and TWAP chunk slicing logic
  */
 export async function executeOrder(params: ExecutionParams): Promise<ExecutionResult> {
   const { signal, userId, paperTrading, chunkOrders, maxChunkSize, delayBetweenChunksMs } = params;
@@ -221,25 +360,19 @@ export async function executeOrder(params: ExecutionParams): Promise<ExecutionRe
 
   const totalQuantity = signal.quantity;
 
-  // Split into chunks if needed
+  // Split into chunks if needed (TWAP Order Splicer)
   if (chunkOrders && totalQuantity > maxChunkSize) {
     const chunks: ChunkResult[] = [];
     let remaining = totalQuantity;
     let chunkIndex = 0;
     let totalFilled = 0;
+    
+    // Slice block into 10% components or maxChunkSize limit
+    const dynamicChunkSize = Math.max(1, Math.min(maxChunkSize, Math.ceil(totalQuantity / 10)));
 
     while (remaining > 0) {
-      const chunkQty = Math.min(maxChunkSize, remaining);
-      let result: Awaited<ReturnType<typeof routeOrder>> = { success: false };
-      let retries = 0;
-
-      while (!result.success && retries < MAX_RETRIES) {
-        result = await routeOrder(params, chunkQty);
-        if (!result.success) {
-          retries++;
-          await new Promise(r => setTimeout(r, RETRY_DELAY_MS * retries));
-        }
-      }
+      const chunkQty = Math.min(dynamicChunkSize, remaining);
+      let result = await executePassiveLimitOrder(params, chunkQty);
 
       chunks.push({
         chunkIndex, quantity: chunkQty,
@@ -265,7 +398,7 @@ export async function executeOrder(params: ExecutionParams): Promise<ExecutionRe
       data: {
         level: success ? 'INFO' : 'ERROR',
         source: 'SMART_EXECUTION',
-        message: `Chunked order: ${totalFilled}/${totalQuantity} filled in ${chunks.length} chunks`,
+        message: `TWAP Sliced: ${totalFilled}/${totalQuantity} filled passively in ${chunks.length} chunks`,
         data: JSON.stringify({ signal, chunks }),
       },
     });
@@ -273,17 +406,8 @@ export async function executeOrder(params: ExecutionParams): Promise<ExecutionRe
     return { success, actualEntryPrice: avgPrice, actualQuantity: totalFilled, slippagePct, chunks };
   }
 
-  // Single order with retry
-  let result: Awaited<ReturnType<typeof routeOrder>> = { success: false };
-  let retries = 0;
-
-  while (!result.success && retries < MAX_RETRIES) {
-    result = await routeOrder(params, totalQuantity);
-    if (!result.success) {
-      retries++;
-      await new Promise(r => setTimeout(r, RETRY_DELAY_MS * retries));
-    }
-  }
+  // Single order execution via passive placer
+  const result = await executePassiveLimitOrder(params, totalQuantity);
 
   const slippagePct = result.price
     ? Math.abs(result.price - signal.entryPrice) / signal.entryPrice * 100
@@ -294,9 +418,9 @@ export async function executeOrder(params: ExecutionParams): Promise<ExecutionRe
       level: result.success ? 'INFO' : 'ERROR',
       source: 'SMART_EXECUTION',
       message: result.success
-        ? `Order placed: ${signal.direction} ${totalQuantity} ${signal.symbol} @ ₹${result.price ?? signal.entryPrice} (id: ${result.orderId})`
-        : `Order failed: ${signal.symbol} — ${result.error}`,
-      data: JSON.stringify({ signal, result, retries }),
+        ? `Passive Order placed: ${signal.direction} ${totalQuantity} ${signal.symbol} @ ₹${result.price ?? signal.entryPrice} (id: ${result.orderId})`
+        : `Passive Order failed: ${signal.symbol} — ${result.error}`,
+      data: JSON.stringify({ signal, result }),
     },
   });
 
@@ -307,6 +431,6 @@ export async function executeOrder(params: ExecutionParams): Promise<ExecutionRe
     actualQuantity: result.success ? totalQuantity : 0,
     slippagePct,
     reason: result.error,
-    retries,
+    retries: 0,
   };
 }

@@ -30,53 +30,52 @@ export function detectMarketRegime(data: MarketDataPoint[]): RegimeAnalysis {
   // Calculate market breadth and direction
   const changes = data.map(d => d?.changePct ?? 0);
   const avgChange = changes.reduce((a, b) => a + b, 0) / changes.length;
-  const advancing = changes.filter(c => c > 0.3).length;
-  const declining = changes.filter(c => c < -0.3).length;
+  const advancing = changes.filter(c => c > 0.25).length;
+  const declining = changes.filter(c => c < -0.25).length;
   const breadth = data.length > 0 ? Math.max(advancing, declining) / data.length : 0;
 
-  // Calculate volatility (std deviation of changes)
+  // Calculate volatility (standard deviation of changes)
   const variance = changes.reduce((sum, c) => sum + Math.pow(c - avgChange, 2), 0) / changes.length;
   const volatility = Math.sqrt(variance);
 
-  // Calculate average volume strength
-  const avgVolume = data.reduce((s, d) => s + (d?.volume ?? 0), 0) / data.length;
-  const highVolumeCount = data.filter(d => (d?.volume ?? 0) > avgVolume * 1.3).length;
-  const volumeStrength = highVolumeCount / data.length;
-
-  // Regime classification
+  // Classification using statistical boundaries
   let regime: MarketRegime;
   let confidence: number;
   let description: string;
   let recommendedStrategies: string[];
   let disabledStrategies: string[];
 
-  if (volatility > 2.5) {
-    // High volatility regime
+  // 1. Extreme Volatility / Churn check (Z-Score of standard deviation > 2.2)
+  if (volatility > 2.2 && Math.abs(avgChange) < 0.4) {
     regime = 'VOLATILE';
-    confidence = Math.min(90, 60 + volatility * 8);
-    description = `High volatility (${volatility.toFixed(1)}%), wide price swings. Reduce position sizes, use wider stops.`;
-    recommendedStrategies = ['BOLLINGER', 'SUPERTREND', 'RSI'];
+    confidence = Math.min(95, 60 + (volatility - 2.2) * 15);
+    description = `Volatile Range-bound: High intraday dispersion (${volatility.toFixed(2)}%) but no market direction. Reduce position sizing and avoid momentum.`;
+    recommendedStrategies = ['BOLLINGER', 'RSI', 'SUPERTREND'];
     disabledStrategies = ['MOMENTUM', 'EMA_CROSS', 'VWAP'];
-  } else if (avgChange > 0.8 && breadth > 0.6) {
-    // Strong uptrend
+  }
+  // 2. Bullish Trend check (positive change with high consensus breadth)
+  else if (avgChange > 0.45 && breadth > 0.55) {
     regime = 'TRENDING_UP';
-    confidence = Math.min(90, 60 + avgChange * 15 + breadth * 20);
-    description = `Bullish trend, ${(breadth * 100).toFixed(0)}% stocks advancing. Favor long positions.`;
-    recommendedStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS', 'MACD'];
-    disabledStrategies = ['BOLLINGER', 'VWAP']; // Mean reversion fails in trends
-  } else if (avgChange < -0.8 && breadth > 0.6) {
-    // Strong downtrend
+    confidence = Math.min(95, 50 + (avgChange * 20) + (breadth * 30));
+    description = `Bullish Trend: Market advancing with ${(breadth * 100).toFixed(0)}% asset alignment. Sizing is optimized for Long momentum entries.`;
+    recommendedStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS', 'MACD', 'VWAP_PULLBACK', 'VOLUME_BREAKOUT'];
+    disabledStrategies = ['BOLLINGER', 'VWAP']; // Mean reversion fails in strong trends
+  }
+  // 3. Bearish Trend check (negative change with high consensus breadth)
+  else if (avgChange < -0.45 && breadth > 0.55) {
     regime = 'TRENDING_DOWN';
-    confidence = Math.min(90, 60 + Math.abs(avgChange) * 15 + breadth * 20);
-    description = `Bearish trend, ${(breadth * 100).toFixed(0)}% stocks declining. Favor short positions or stay cash.`;
-    recommendedStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS', 'MACD'];
+    confidence = Math.min(95, 50 + (Math.abs(avgChange) * 20) + (breadth * 30));
+    description = `Bearish Trend: Market declining with ${(breadth * 100).toFixed(0)}% asset alignment. Long entries are restricted.`;
+    recommendedStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS', 'MACD', 'VWAP_PULLBACK', 'VOLUME_BREAKOUT'];
     disabledStrategies = ['BOLLINGER', 'VWAP'];
-  } else {
-    // Sideways/range-bound
+  }
+  // 4. Default: Sideways / Quiet Range-bound
+  else {
     regime = 'SIDEWAYS';
-    confidence = Math.min(85, 55 + (1 - Math.abs(avgChange)) * 20);
-    description = `Range-bound market, avg change ${avgChange.toFixed(2)}%. Mean reversion strategies work best.`;
-    recommendedStrategies = ['RSI', 'BOLLINGER', 'VWAP'];
+    const quietFactor = Math.max(0, 1.5 - volatility);
+    confidence = Math.min(90, 50 + quietFactor * 25 + (1 - Math.abs(avgChange)) * 15);
+    description = `Sideways Quiet: Range-bound consolidation. Ideal setup for mean reversion (RSI, Bollinger Bands, and VWAP).`;
+    recommendedStrategies = ['RSI', 'BOLLINGER', 'VWAP', 'OFI_VSA'];
     disabledStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS'];
   }
 

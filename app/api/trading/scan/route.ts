@@ -229,6 +229,7 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
       emaCross: config?.enableEMACross !== false,
       vwapPullback: config?.enableVwapPullback !== false,
       volBreakout: config?.enableVolBreakout !== false,
+      ofiVsa: config?.enableOfiVsa !== false,
     };
 
     const strategyWeights = await getStrategyWeightsFromDb(userId);
@@ -250,8 +251,8 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
 
     const signalResult = await runSignalAgent(marketData, historyMap, {
       enabledStrategies,
-      minVoteCount: paperTrading ? 1 : 2,
-      minConfidenceThreshold: 60,
+      minVoteCount: paperTrading ? 2 : 3,
+      minConfidenceThreshold: 70,
       enableXGBoost: true,
       enableNewsSentiment: config?.enableNewsSentiment !== false,
       newsHeadlines,
@@ -301,7 +302,8 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
       signalResult.signals,
       regimeResult,
       featuresMap,
-      currentPrices
+      currentPrices,
+      historyMap
     );
 
     // ═══════════════════════════════════════

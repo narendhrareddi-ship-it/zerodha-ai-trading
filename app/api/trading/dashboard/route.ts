@@ -172,6 +172,7 @@ export async function GET() {
         { name: 'EMA Crossover', enabled: config?.enableEMACross ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'EMA_CROSSOVER' || t?.strategy === 'EMA_CROSS')?.length ?? 0, weight: weights?.EMA_CROSS ?? 1.0 },
         { name: 'VWAP Pullback', enabled: config?.enableVwapPullback ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'VWAP_PULLBACK')?.length ?? 0, weight: weights?.VWAP_PULLBACK ?? 1.0 },
         { name: 'Volume Breakout', enabled: config?.enableVolBreakout ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'VOLUME_BREAKOUT')?.length ?? 0, weight: weights?.VOLUME_BREAKOUT ?? 1.0 },
+        { name: 'OFI / VSA', enabled: config?.enableOfiVsa ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'OFI_VSA')?.length ?? 0, weight: weights?.OFI_VSA ?? 1.0 },
         { name: 'News Sentiment', enabled: config?.enableNewsSentiment ?? true, signals: 0, trades: todayTrades?.filter?.((t: any) => t?.strategy === 'NEWS_SENTIMENT')?.length ?? 0, weight: weights?.NEWS_SENTIMENT ?? 1.0 },
         { name: 'XGBoost AI', enabled: true, signals: 0, trades: 0, weight: weights?.XGBOOST ?? 1.0 },
       ],

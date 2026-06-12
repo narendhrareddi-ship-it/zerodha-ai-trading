@@ -136,6 +136,65 @@ function calculateATR(highs: number[], lows: number[], closes: number[], period:
   return atrSum / period;
 }
 
+function calculateAtrSLTarget(
+  stock: MarketDataPoint,
+  historyMap: Map<string, HistoricalPrices> | undefined,
+  direction: 'BUY' | 'SELL',
+  fallbackSLPercent: number,
+  fallbackTargetPercent: number
+): { stopLoss: number; target: number } {
+  const price = stock.lastPrice;
+  if (historyMap) {
+    try {
+      const closes = getPriceHistory(stock, historyMap, 20);
+      const { highs, lows } = getHighLowHistory(stock, historyMap, 20);
+      const atr = calculateATR(highs, lows, closes, 14);
+      if (atr > 0 && atr < price * 0.1) {
+        if (direction === 'BUY') {
+          return {
+            stopLoss: Math.round(Math.max(price - 2.0 * atr, price * 0.95) * 100) / 100,
+            target: Math.round((price + 3.5 * atr) * 100) / 100
+          };
+        } else {
+          return {
+            stopLoss: Math.round(Math.min(price + 2.0 * atr, price * 1.05) * 100) / 100,
+            target: Math.round((price - 3.5 * atr) * 100) / 100
+          };
+        }
+      }
+    } catch { /* fallback */ }
+  }
+  if (direction === 'BUY') {
+    return {
+      stopLoss: Math.round(price * (1 - fallbackSLPercent / 100) * 100) / 100,
+      target: Math.round(price * (1 + fallbackTargetPercent / 100) * 100) / 100
+    };
+  } else {
+    return {
+      stopLoss: Math.round(price * (1 + fallbackSLPercent / 100) * 100) / 100,
+      target: Math.round(price * (1 - fallbackTargetPercent / 100) * 100) / 100
+    };
+  }
+}
+
+function verifyMtfCoherence(
+  stock: MarketDataPoint,
+  historyMap: Map<string, HistoricalPrices> | undefined,
+  direction: 'BUY' | 'SELL'
+): boolean {
+  if (!historyMap) return true;
+  const hist = historyMap.get(stock.symbol);
+  if (!hist || !hist.closes || hist.closes.length < 50) return true;
+  const closes = hist.closes;
+  const sma50 = sma(closes, 50);
+  const price = stock.lastPrice;
+  if (direction === 'BUY') {
+    return price > sma50;
+  } else {
+    return price < sma50;
+  }
+}
+
 // ===== Strategy 1: Momentum Trading =====
 export function momentumStrategy(data: MarketDataPoint[]): TradeSignal[] {
   const signals: TradeSignal[] = [];
@@ -549,6 +608,55 @@ export function volumeBreakoutStrategy(
   return signals;
 }
 
+// ===== Strategy 11: Real-Time OFI & Volume Spread Analysis (VSA) =====
+export function ofiVsaStrategy(
+  data: MarketDataPoint[],
+  historyMap?: Map<string, HistoricalPrices>
+): TradeSignal[] {
+  const signals: TradeSignal[] = [];
+  for (const stock of (data ?? [])) {
+    const price = stock?.lastPrice ?? 0;
+    const volume = stock?.volume ?? 0;
+    const open = stock?.open ?? 0;
+    const high = stock?.high ?? 0;
+    const low = stock?.low ?? 0;
+    if (price <= 0 || volume <= 0 || high <= low) continue;
+
+    const body = price - open;
+    const range = high - low;
+    const spread = Math.abs(body);
+    const closingPosition = range > 0 ? (price - low) / range : 0.5;
+
+    if (!historyMap) continue;
+    const hist = historyMap.get(stock.symbol);
+    if (!hist || !hist.volumes || hist.volumes.length < 20) continue;
+
+    const avgVolume = sma(hist.volumes, 20);
+    const isHighVolume = volume > avgVolume * 1.5;
+
+    // Bullish VSA: High volume, large body, closing near the top (closingPosition > 0.8)
+    if (isHighVolume && body > 0 && spread > (range * 0.5) && closingPosition > 0.8) {
+      signals.push({
+        symbol: stock.symbol, exchange: 'NSE', direction: 'BUY', strategy: 'OFI_VSA',
+        confidence: 85,
+        entryPrice: price, stopLoss: price * 0.99, target: price * 1.025, quantity: 0,
+        reason: `OFI/VSA: Institutional buying detected. High volume (${(volume/avgVolume).toFixed(1)}x avg) and closing near high.`,
+      });
+    }
+
+    // Bearish VSA: High volume, large body, closing near the bottom (closingPosition < 0.2)
+    if (isHighVolume && body < 0 && spread > (range * 0.5) && closingPosition < 0.2) {
+      signals.push({
+        symbol: stock.symbol, exchange: 'NSE', direction: 'SELL', strategy: 'OFI_VSA',
+        confidence: 85,
+        entryPrice: price, stopLoss: price * 1.01, target: price * 0.975, quantity: 0,
+        reason: `OFI/VSA: Institutional distribution detected. High volume (${(volume/avgVolume).toFixed(1)}x avg) and closing near low.`,
+      });
+    }
+  }
+  return signals;
+}
+
 // ===== Export all strategy runner =====
 export function runAllStrategies(
   data: MarketDataPoint[],
@@ -565,6 +673,29 @@ export function runAllStrategies(
   if (enabledStrategies?.emaCross !== false) signals = [...signals, ...emaCrossoverStrategy(data, historyMap)];
   if (enabledStrategies?.vwapPullback !== false) signals = [...signals, ...vwapPullbackStrategy(data, historyMap)];
   if (enabledStrategies?.volBreakout !== false) signals = [...signals, ...volumeBreakoutStrategy(data, historyMap)];
+  if (enabledStrategies?.ofiVsa !== false) signals = [...signals, ...ofiVsaStrategy(data, historyMap)];
+
+  // Centralized Multi-Timeframe Trend Coherence Filter
+  signals = signals.filter(s => {
+    const stock = data.find(d => d.symbol === s.symbol);
+    if (!stock) return false;
+    return verifyMtfCoherence(stock, historyMap, s.direction);
+  });
+
+  // Centralized ATR-Based Dynamic Stop-Loss and Target Adjustment
+  signals = signals.map(s => {
+    const stock = data.find(d => d.symbol === s.symbol);
+    if (!stock) return s;
+    const fallbackSL = s.strategy === 'VOLUME_BREAKOUT' ? 1.5 : 1.0;
+    const fallbackTarget = s.strategy === 'VOLUME_BREAKOUT' ? 3.0 : 2.0;
+    const atrBoundaries = calculateAtrSLTarget(stock, historyMap, s.direction, fallbackSL, fallbackTarget);
+    return {
+      ...s,
+      stopLoss: atrBoundaries.stopLoss,
+      target: atrBoundaries.target
+    };
+  });
+
   return signals;
 }
 
@@ -579,5 +710,6 @@ export const ALL_STRATEGIES = [
   { key: 'emaCross', name: 'EMA Crossover', desc: 'EMA 9/21 golden/death cross signals' },
   { key: 'vwapPullback', name: 'VWAP Pullback', desc: 'VWAP pullbacks in strong EMA trends (Quant Favorite)' },
   { key: 'volBreakout', name: 'Volume Breakout', desc: 'Volume-spread breakouts of 20-day high/low range (Institutional)' },
+  { key: 'ofiVsa', name: 'OFI / VSA', desc: 'Order Flow Imbalance and Volume Spread Analysis (SOTA Institutional)' },
   { key: 'newsSentiment', name: 'News Sentiment', desc: 'AI-powered news analysis for trading signals' },
 ];

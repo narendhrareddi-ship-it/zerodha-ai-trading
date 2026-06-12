@@ -199,6 +199,13 @@ export function ConfigPanel() {
             />
           </div>
           <div className="flex items-center justify-between">
+            <Label className="text-xs">OFI / VSA Strategy</Label>
+            <Switch
+              checked={config?.enableOfiVsa ?? true}
+              onCheckedChange={(checked: boolean) => updateField('enableOfiVsa', checked)}
+            />
+          </div>
+          <div className="flex items-center justify-between">
             <Label className="text-xs">News Sentiment Strategy</Label>
             <Switch
               checked={config?.enableNewsSentiment ?? true}
