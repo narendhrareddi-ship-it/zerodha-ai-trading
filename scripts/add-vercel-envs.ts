@@ -8,7 +8,8 @@ const envs = {
   ABACUSAI_API_KEY: 's2_2ee0cdd8c3a2481988f8868d2ab109ad',
   KITE_API_KEY: '8pu6ys3tdgxb99so',
   KITE_API_SECRET: '7rmia27pmuar22fewy94z86xgggjstj3',
-  TELEGRAM_BOT_TOKEN: '8887843181:AAHfOve5si9mlO4w-nJefqUI8kz5XpbZoi4'
+  TELEGRAM_BOT_TOKEN: '8887843181:AAHfOve5si9mlO4w-nJefqUI8kz5XpbZoi4',
+  USE_LOCAL_ML: 'true'
 };
 
 async function main() {

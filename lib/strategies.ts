@@ -424,28 +424,18 @@ export async function newsSentimentStrategy(
       s => `[${s.label.toUpperCase()} ${Math.round(s.score * 100)}%] ${s.text}`
     );
 
-    const response = await fetch('https://apps.abacus.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.ABACUSAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-5.4-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a financial news analyst for Indian stock markets. Headlines are pre-tagged with FinBERT sentiment [POSITIVE/NEGATIVE XX%]. Map them to trading signals for available stocks. Return JSON only:\n{"signals": [{"symbol": "RELIANCE", "direction": "BUY", "confidence": 75, "reason": "..."}]}\nPOSITIVE sentiment = BUY, NEGATIVE = SELL. Only include signals with confidence > 60. Available stocks: ${stockData?.map?.((s) => s?.symbol)?.join?.(', ')}.\nRespond with raw JSON only, no markdown.`,
-          },
-          { role: 'user', content: `FinBERT-analyzed headlines:\n${taggedHeadlines?.join?.('\n')}` },
-        ],
-        max_tokens: 1000,
-        response_format: { type: 'json_object' },
-      }),
+    const { getLLMCompletion } = await import('./llm');
+    const content = await getLLMCompletion({
+      messages: [
+        {
+          role: 'system',
+          content: `You are a financial news analyst for Indian stock markets. Headlines are pre-tagged with FinBERT sentiment [POSITIVE/NEGATIVE XX%]. Map them to trading signals for available stocks. Return JSON only:\n{"signals": [{"symbol": "RELIANCE", "direction": "BUY", "confidence": 75, "reason": "..."}]}\nPOSITIVE sentiment = BUY, NEGATIVE = SELL. Only include signals with confidence > 60. Available stocks: ${stockData?.map?.((s) => s?.symbol)?.join?.(', ')}.\nRespond with raw JSON only, no markdown.`,
+        },
+        { role: 'user', content: `FinBERT-analyzed headlines:\n${taggedHeadlines?.join?.('\n')}` },
+      ],
+      maxTokens: 1000,
+      jsonMode: true,
     });
-    if (!response?.ok) return [];
-    const result = await response.json();
-    const content = result?.choices?.[0]?.message?.content ?? '{}';
     let parsed: any;
     try { parsed = JSON.parse(content); } catch { return []; }
     const signals: TradeSignal[] = [];

@@ -134,19 +134,12 @@ async function llmXGBoostPredict(
     maCross9_21: features.maCross9_21,
     maCross21_50: features.maCross21_50,
   };
-
-  const response = await fetch('https://apps.abacus.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4.1-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `You are an XGBoost ensemble model for NSE stock trading. Given a feature vector, predict trading direction using gradient-boosted tree logic. Consider feature interactions. Return JSON only:
+  const { getLLMCompletion } = await import('./llm');
+  const content = await getLLMCompletion({
+    messages: [
+      {
+        role: 'system',
+        content: `You are an XGBoost ensemble model for NSE stock trading. Given a feature vector, predict trading direction using gradient-boosted tree logic. Consider feature interactions. Return JSON only:
 {
   "direction": "BUY"|"SELL"|"HOLD",
   "probability": 0.0-1.0,
@@ -156,20 +149,16 @@ async function llmXGBoostPredict(
   "reasoning": "brief explanation of key features driving prediction"
 }
 Rules: probability > 0.65 for BUY/SELL signals. Consider RSI divergence, MACD momentum, Bollinger squeeze, volume confirmation. NSE intraday context.`,
-        },
-        {
-          role: 'user',
-          content: `Feature vector for ${features.symbol}:\n${JSON.stringify(featurePayload, null, 2)}`,
-        },
-      ],
-      max_tokens: 400,
-      response_format: { type: 'json_object' },
-    }),
+      },
+      {
+        role: 'user',
+        content: `Feature vector for ${features.symbol}:\n${JSON.stringify(featurePayload, null, 2)}`,
+      },
+    ],
+    maxTokens: 400,
+    jsonMode: true,
   });
 
-  if (!response.ok) throw new Error(`LLM API error: ${response.status}`);
-  const result = await response.json();
-  const content = result?.choices?.[0]?.message?.content ?? '{}';
   const parsed = JSON.parse(content);
 
   return {

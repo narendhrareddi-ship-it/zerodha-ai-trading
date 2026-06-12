@@ -72,29 +72,18 @@ async function callHuggingFace(texts: string[]): Promise<SentimentResult[]> {
 }
 
 async function llmFinancialSentiment(texts: string[]): Promise<SentimentResult[]> {
-  const apiKey = process.env.ABACUSAI_API_KEY;
-  if (!apiKey) throw new Error('No LLM API key');
-
-  const response = await fetch('https://apps.abacus.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'gpt-5.4-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `You are FinBERT, a financial sentiment analysis model. For each headline, classify sentiment as positive, negative, or neutral with confidence scores (0-1). Return JSON array only:\n[{"label": "positive", "score": 0.92, "scores": {"positive": 0.92, "negative": 0.03, "neutral": 0.05}}]\nFinancial context matters: "revenue fell 5%" = negative, "beat estimates" = positive, "maintained guidance" = neutral.\nReturn raw JSON array, no markdown.`,
-        },
-        { role: 'user', content: texts.map((t, i) => `${i + 1}. ${t}`).join('\n') },
-      ],
-      max_tokens: 800,
-      response_format: { type: 'json_object' },
-    }),
+  const { getLLMCompletion } = await import('./llm');
+  const content = await getLLMCompletion({
+    messages: [
+      {
+        role: 'system',
+        content: `You are FinBERT, a financial sentiment analysis model. For each headline, classify sentiment as positive, negative, or neutral with confidence scores (0-1). Return JSON array only:\n[{"label": "positive", "score": 0.92, "scores": {"positive": 0.92, "negative": 0.03, "neutral": 0.05}}]\nFinancial context matters: "revenue fell 5%" = negative, "beat estimates" = positive, "maintained guidance" = neutral.\nReturn raw JSON array, no markdown.`,
+      },
+      { role: 'user', content: texts.map((t, i) => `${i + 1}. ${t}`).join('\n') },
+    ],
+    maxTokens: 800,
+    jsonMode: true,
   });
-
-  if (!response?.ok) throw new Error('LLM API error');
-  const result = await response.json();
-  const content = result?.choices?.[0]?.message?.content ?? '[]';
   let parsed: any;
   try { parsed = JSON.parse(content); } catch { throw new Error('Parse error'); }
   
