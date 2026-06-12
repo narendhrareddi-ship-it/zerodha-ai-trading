@@ -39,8 +39,9 @@ export async function POST(request: NextRequest) {
       let mode = 'PAPER';
       let brokerConnected = false;
 
-      if (kiteToken) { mode = 'LIVE'; brokerConnected = true; }
+      if (kiteToken && brokerType === 'kite') { mode = 'LIVE'; brokerConnected = true; }
       else if (brokerType === 'fyers' && config?.fyersAppId && config?.fyersToken) { mode = 'LIVE'; brokerConnected = true; }
+      else if (brokerType === 'kotak' && config?.kotakConsumerKey && config?.kotakToken) { mode = 'LIVE'; brokerConnected = true; }
       else if (brokerType === 'openalgo' && config?.openalgoApiKey) { mode = 'LIVE'; brokerConnected = true; }
 
       const botSession = await prisma.botSession.create({

@@ -6,7 +6,8 @@ const nextConfig = {
   output: process.env.NEXT_OUTPUT_MODE,
   productionBrowserSourceMaps: false,
   experimental: {
-    outputFileTracingRoot: path.join(__dirname, '../'),
+    // Restrict tracing root to the current project directory to prevent traversing C:\ on Windows
+    outputFileTracingRoot: __dirname,
   },
   eslint: {
     ignoreDuringBuilds: true,
@@ -26,6 +27,10 @@ const nextConfig = {
       config.output.filename = 'static/chunks/[name]-[contenthash:8].js';
       config.output.chunkFilename = 'static/chunks/[contenthash:16].js';
     }
+    // Ignore node_modules and build directories for watchpack file watcher stability
+    config.watchOptions = {
+      ignored: ['**/node_modules/**', '**/.next/**'],
+    };
     return config;
   },
 };

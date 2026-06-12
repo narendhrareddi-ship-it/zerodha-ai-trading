@@ -235,7 +235,7 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
         'Nifty continues bullish momentum on FII inflows',
         'Banking sector leads gains on credit growth data',
       ],
-      apiKey: process.env.ABACUSAI_API_KEY,
+      apiKey: process.env.USE_LOCAL_ML === 'true' ? undefined : process.env.ABACUSAI_API_KEY,
       strategyWeights,
     });
 
@@ -500,11 +500,27 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
 
 async function isLiveMode(userId: string): Promise<boolean> {
   try {
-    const token = await prisma.kiteToken.findFirst({
-      where: { userId, expiresAt: { gt: new Date() } },
-      orderBy: { createdAt: 'desc' },
-    });
-    return !!token;
+    const config = await prisma.tradingConfig.findUnique({ where: { userId } });
+    if (!config) return false;
+
+    const brokerType = config.brokerType ?? 'kite';
+    if (brokerType === 'kite') {
+      const token = await prisma.kiteToken.findFirst({
+        where: { userId, expiresAt: { gt: new Date() } },
+        orderBy: { createdAt: 'desc' },
+      });
+      return !!token;
+    }
+    if (brokerType === 'fyers') {
+      return !!(config.fyersAppId && config.fyersToken);
+    }
+    if (brokerType === 'kotak') {
+      return !!(config.kotakConsumerKey && config.kotakToken);
+    }
+    if (brokerType === 'openalgo') {
+      return !!config.openalgoApiKey;
+    }
+    return false;
   } catch { return false; }
 }
 

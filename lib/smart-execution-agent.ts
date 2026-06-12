@@ -165,6 +165,29 @@ async function routeOrder(
       }
     }
 
+    case 'kotak': {
+      try {
+        const { KotakNeoClient } = await import('./kotak-neo');
+        const client = new KotakNeoClient({
+          consumerKey: config?.kotakConsumerKey ?? '',
+          accessToken: config?.kotakToken ?? '',
+        });
+        const formattedSymbol = KotakNeoClient.formatSymbol(signal.symbol);
+        const result = await client.placeOrder({
+          symbol: formattedSymbol,
+          exchange: signal.symbol.startsWith('BSE') ? 'bse_cm' : 'nse_cm',
+          transactionType: signal.direction === 'BUY' ? 'B' : 'S',
+          orderType: 'MKT',
+          quantity,
+          product: 'MIS',
+        });
+        const orderId = result?.orderId ?? result?.gOrderNo ?? result?.data?.orderId;
+        return { orderId: orderId ? String(orderId) : undefined, success: !!orderId, price: signal.entryPrice };
+      } catch (err: any) {
+        return { success: false, error: err?.message };
+      }
+    }
+
     default:
       return { success: false, error: `Unsupported broker: ${brokerType}` };
   }

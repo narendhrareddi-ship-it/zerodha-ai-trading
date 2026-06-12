@@ -159,11 +159,11 @@ export async function logTradingEvent(
 
 export function isMarketOpen(): boolean {
   const now = new Date();
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const ist = new Date(now.getTime() + istOffset + now.getTimezoneOffset() * 60 * 1000);
-  const hours = ist.getHours();
-  const minutes = ist.getMinutes();
-  const day = ist.getDay();
+  const istString = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+  const istDate = new Date(istString);
+  const hours = istDate.getHours();
+  const minutes = istDate.getMinutes();
+  const day = istDate.getDay();
 
   // Weekend check
   if (day === 0 || day === 6) return false;
@@ -178,10 +178,10 @@ export function isMarketOpen(): boolean {
 
 export function shouldSquareOff(squareOffTime: string = '15:10'): boolean {
   const now = new Date();
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const ist = new Date(now.getTime() + istOffset + now.getTimezoneOffset() * 60 * 1000);
-  const hours = ist.getHours();
-  const minutes = ist.getMinutes();
+  const istString = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+  const istDate = new Date(istString);
+  const hours = istDate.getHours();
+  const minutes = istDate.getMinutes();
   const [sqHours, sqMinutes] = (squareOffTime ?? '15:10').split(':').map(Number);
   const currentMinutes = hours * 60 + minutes;
   const squareOffMinutes = (sqHours ?? 15) * 60 + (sqMinutes ?? 10);
