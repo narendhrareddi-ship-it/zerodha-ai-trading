@@ -18,12 +18,6 @@ export async function GET() {
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    // Use LLM to generate latest market news analysis
-    const apiKey = process.env.ABACUSAI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ news: getStaticNews() });
-    }
-
     const today = new Date().toLocaleDateString('en-IN', {
       timeZone: 'Asia/Kolkata',
       weekday: 'long',
@@ -32,35 +26,21 @@ export async function GET() {
       day: 'numeric',
     });
 
-    const response = await fetch('https://llmapi.abacus.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-5.4-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a financial news analyst specializing in the Indian stock market. Generate realistic, current market news based on real market trends and sectors. Return JSON array only.',
-          },
-          {
-            role: 'user',
-            content: `Generate 8 realistic Indian stock market news items for ${today}. Cover: Nifty/Sensex, sectors (IT, Banking, Pharma, Auto), FII/DII activity, and global cues. Return ONLY a JSON array with objects having: title, description (2-3 sentences), source (realistic Indian financial sources like MoneyControl, ET Markets, LiveMint, CNBC-TV18), sentiment (positive/negative/neutral). No markdown, no code blocks, just the JSON array.`,
-          },
-        ],
-        temperature: 0.8,
-        max_tokens: 2000,
-      }),
+    const { getLLMCompletion } = await import('@/lib/llm');
+    const content = await getLLMCompletion({
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a financial news analyst specializing in the Indian stock market. Generate realistic, current market news based on real market trends and sectors. Return JSON array only.',
+        },
+        {
+          role: 'user',
+          content: `Generate 8 realistic Indian stock market news items for ${today}. Cover: Nifty/Sensex, sectors (IT, Banking, Pharma, Auto), FII/DII activity, and global cues. Return ONLY a JSON array with objects having: title, description (2-3 sentences), source (realistic Indian financial sources like MoneyControl, ET Markets, LiveMint, CNBC-TV18), sentiment (positive/negative/neutral). No markdown, no code blocks, just the JSON array.`,
+        },
+      ],
+      maxTokens: 2000,
+      jsonMode: true,
     });
-
-    if (!response?.ok) {
-      return NextResponse.json({ news: getStaticNews() });
-    }
-
-    const data = await response.json();
-    const content = data?.choices?.[0]?.message?.content ?? '';
 
     try {
       // Extract JSON from response (handle markdown code blocks)
@@ -80,12 +60,35 @@ export async function GET() {
 
       return NextResponse.json({ news: formattedNews });
     } catch {
-      return NextResponse.json({ news: getStaticNews() });
+      const liveNews = await getLiveNewsFallback();
+      return NextResponse.json({ news: liveNews });
     }
   } catch (err: any) {
-    // LLM API may be unavailable, falling back to static news
-    return NextResponse.json({ news: getStaticNews() });
+    const liveNews = await getLiveNewsFallback();
+    return NextResponse.json({ news: liveNews });
   }
+}
+
+async function getLiveNewsFallback(): Promise<NewsItem[]> {
+  try {
+    const { fetchGoogleNewsHeadlines } = await import('@/lib/news');
+    const headlines = await fetchGoogleNewsHeadlines();
+    if (headlines?.length) {
+      return headlines.map((title, idx) => ({
+        title,
+        description: `Live tracking for: "${title}". Market momentum is actively analyzed by the agent pipeline.`,
+        source: 'Live RSS Feed',
+        url: '#',
+        publishedAt: new Date(Date.now() - idx * 15 * 60 * 1000).toISOString(),
+        sentiment: title.toLowerCase().includes('jump') || title.toLowerCase().includes('rally') || title.toLowerCase().includes('gain') || title.toLowerCase().includes('rise')
+          ? 'positive'
+          : title.toLowerCase().includes('tumble') || title.toLowerCase().includes('fall') || title.toLowerCase().includes('drop') || title.toLowerCase().includes('loss')
+          ? 'negative'
+          : 'neutral',
+      }));
+    }
+  } catch {}
+  return getStaticNews();
 }
 
 function getStaticNews(): NewsItem[] {

@@ -52,7 +52,18 @@ export async function GET(request: NextRequest) {
   // Build redirect URL to our callback page
   const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? '';
   const protocol = request.headers.get('x-forwarded-proto') ?? 'https';
-  const baseUrl = process.env.NEXTAUTH_URL ?? `${protocol}://${host}`;
+  
+  const isRequestLocal = host.includes('localhost') || host.includes('127.0.0.1');
+  const envUrl = process.env.NEXTAUTH_URL ?? '';
+  const isEnvLocal = envUrl.includes('localhost') || envUrl.includes('127.0.0.1');
+  
+  let baseUrl = `${protocol}://${host}`;
+  if (isRequestLocal) {
+    baseUrl = `http://${host}`;
+  } else if (envUrl && !isEnvLocal) {
+    baseUrl = envUrl;
+  }
+  
   const redirectUrl = `${baseUrl}/kite/callback`;
   return NextResponse.json({ loginUrl: getKiteLoginUrl(apiKey, redirectUrl) });
 }

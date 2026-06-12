@@ -118,9 +118,6 @@ export async function POST(request: NextRequest) {
 }
 
 async function generateAIInsight(tradeData: any): Promise<string> {
-  const apiKey = process.env.ABACUSAI_API_KEY;
-  if (!apiKey) return '';
-
   const prompt = `Analyze this trade and provide a brief 2-3 sentence insight:
 Symbol: ${tradeData?.symbol ?? 'N/A'}
 Direction: ${tradeData?.direction ?? 'N/A'}
@@ -132,24 +129,17 @@ Trader Emotion: ${tradeData?.emotion ?? 'neutral'}
 
 Provide: 1) What went right/wrong, 2) Key lesson, 3) Improvement suggestion. Be specific and actionable.`;
 
-  const res = await fetch('https://api.abacus.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-5.4-mini',
+  try {
+    const { getLLMCompletion } = await import('@/lib/llm');
+    return await getLLMCompletion({
       messages: [
         { role: 'system', content: 'You are a professional trading coach. Provide concise, actionable trade analysis.' },
         { role: 'user', content: prompt },
       ],
-      max_tokens: 300,
-      temperature: 0.7,
-    }),
-  });
-
-  if (!res?.ok) return '';
-  const data = await res.json();
-  return data?.choices?.[0]?.message?.content ?? '';
+      maxTokens: 300,
+    });
+  } catch (err: any) {
+    console.error('Failed to generate journal insight:', err?.message);
+    return '';
+  }
 }

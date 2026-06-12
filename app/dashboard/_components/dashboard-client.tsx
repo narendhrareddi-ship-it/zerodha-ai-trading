@@ -44,8 +44,8 @@ const PanelLoader = memo(function PanelLoader() {
   );
 });
 
-// Auto-scan interval when bot is running (120s default)
-const DEFAULT_SCAN_INTERVAL_MS = 120_000;
+// Auto-scan interval when bot is running (30s)
+const DEFAULT_SCAN_INTERVAL_MS = 30_000;
 
 export function DashboardClient() {
   const { data: session, status } = useSession() || {};
@@ -137,14 +137,13 @@ export function DashboardClient() {
   // ── Auto-scan loop when bot is RUNNING ──
   useEffect(() => {
     const botRunning = dashboardData?.botStatus === 'RUNNING';
-    const isMarketOpen = dashboardData?.isMarketOpen ?? false;
 
     if (autoScanRef.current) {
       clearInterval(autoScanRef.current);
       autoScanRef.current = null;
     }
 
-    if (botRunning && isMarketOpen) {
+    if (botRunning) {
       runScan(true);
       autoScanRef.current = setInterval(() => runScan(true), DEFAULT_SCAN_INTERVAL_MS);
     }
@@ -152,7 +151,7 @@ export function DashboardClient() {
     return () => {
       if (autoScanRef.current) clearInterval(autoScanRef.current);
     };
-  }, [dashboardData?.botStatus, dashboardData?.isMarketOpen]);
+  }, [dashboardData?.botStatus]);
 
   // ── Bot actions ──
   const handleBotAction = useCallback(async (action: string) => {
@@ -253,7 +252,7 @@ export function DashboardClient() {
             <div className="flex items-center gap-2 text-xs text-gray-500">
               <div className={`w-2 h-2 rounded-full ${scanning ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
               <span>
-                {scanning ? 'AI scan in progress...' : `Auto-scanning every 2 min${lastScanTime ? ` · Last: ${lastScanTime.toLocaleTimeString()}` : ''}`}
+                {scanning ? 'AI scan in progress...' : `Auto-scanning every 30s${lastScanTime ? ` · Last: ${lastScanTime.toLocaleTimeString()}` : ''}`}
               </span>
               {lastScanResult?.regime?.regime && (
                 <span className="ml-2 px-2 py-0.5 bg-gray-800 rounded-full text-gray-400">

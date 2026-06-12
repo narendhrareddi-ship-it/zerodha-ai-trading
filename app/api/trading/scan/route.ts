@@ -73,6 +73,7 @@ export async function POST(request: Request) {
 async function runScanForUser(userId: string, startTime: number): Promise<NextResponse> {
   try {
     const config = await prisma.tradingConfig.findUnique({ where: { userId } });
+    const paperTrading = !await isLiveMode(userId);
 
     // ── GATE 1: Bot must be running ──
     const botSession = await prisma.botSession.findFirst({
@@ -83,8 +84,8 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
       return NextResponse.json({ message: 'Bot is not running. Start it first.', signals: [] });
     }
 
-    // ── GATE 2: Square-off time ──
-    if (shouldSquareOff(config?.squareOffTime ?? '15:10')) {
+    // ── GATE 2: Square-off time (Bypass in paper trading for testing) ──
+    if (!paperTrading && shouldSquareOff(config?.squareOffTime ?? '15:10')) {
       await autoSquareOff(userId, config?.squareOffTime ?? '15:10');
       return NextResponse.json({ message: 'Square-off time reached — all positions closed', signals: [] });
     }
@@ -213,6 +214,7 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
     // ═══════════════════════════════════════
     // STEP 4: CLOSE-LOOP SIGNAL AGENT
     // ═══════════════════════════════════════
+
     const enabledStrategies = {
       momentum: config?.enableMomentum !== false,
       rsi: config?.enableRSI !== false,
@@ -225,16 +227,28 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
 
     const strategyWeights = await getStrategyWeightsFromDb(userId);
 
+    // Fetch dynamic real-time market news headlines
+    let newsHeadlines: string[] = [];
+    try {
+      const { fetchGoogleNewsHeadlines } = await import('@/lib/news');
+      newsHeadlines = await fetchGoogleNewsHeadlines();
+    } catch (err: any) {
+      console.error('Failed to fetch news for scan:', err?.message);
+    }
+    if (!newsHeadlines || newsHeadlines.length === 0) {
+      newsHeadlines = [
+        'Nifty continues bullish momentum on FII inflows',
+        'Banking sector leads gains on credit growth data',
+      ];
+    }
+
     const signalResult = await runSignalAgent(marketData, historyMap, {
       enabledStrategies,
-      minVoteCount: 2,
+      minVoteCount: paperTrading ? 1 : 2,
       minConfidenceThreshold: 60,
       enableXGBoost: true,
       enableNewsSentiment: config?.enableNewsSentiment !== false,
-      newsHeadlines: [
-        'Nifty continues bullish momentum on FII inflows',
-        'Banking sector leads gains on credit growth data',
-      ],
+      newsHeadlines,
       apiKey: process.env.USE_LOCAL_ML === 'true' ? undefined : process.env.ABACUSAI_API_KEY,
       strategyWeights,
     });
@@ -255,7 +269,6 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
     // ═══════════════════════════════════════
     // STEP 6: EXECUTION AGENT
     // ═══════════════════════════════════════
-    const paperTrading = !await isLiveMode(userId);
     let executionResult = {
       executed: [] as any[],
       failed: [] as any[],

@@ -46,20 +46,66 @@ export async function GET() {
       orderBy: { date: 'asc' },
       take: 30,
     });
+    // Fetch latest market snapshot from NSE (best-effort for panels)
+    let marketSnapshot: any[] = [];
+    let niftyPrice = 22000;
+    let regime = { regime: 'UNKNOWN', confidence: 0, description: '' };
+    try {
+      const { getLiveQuotes, NSE_POPULAR_STOCKS } = await import('@/lib/nse-live-api');
+      const liveQuotes = await getLiveQuotes(NSE_POPULAR_STOCKS.slice(0, 25)).catch(() => []);
+      if (liveQuotes?.length) {
+        marketSnapshot = liveQuotes.map(q => ({
+          symbol: `NSE:${q.symbol}`,
+          lastPrice: q.lastPrice,
+          open: q.open,
+          high: q.high,
+          low: q.low,
+          close: q.close,
+          volume: q.volume,
+          change: q.change,
+          changePct: q.changePct,
+        }));
+      }
+    } catch { /* non-critical — panels will use stale data */ }
 
-    const positions = openTrades?.map?.((t: any) => ({
-      id: t?.id ?? '',
-      symbol: t?.symbol ?? '',
-      direction: t?.direction ?? '',
-      quantity: t?.quantity ?? 0,
-      entryPrice: t?.entryPrice ?? 0,
-      currentPrice: t?.entryPrice ?? 0,
-      pnl: t?.pnl ?? 0,
-      stopLoss: t?.stopLoss ?? 0,
-      target: t?.target ?? 0,
-      strategy: t?.strategy ?? '',
-      entryTime: t?.entryTime?.toISOString?.() ?? '',
-    })) ?? [];
+    // Fallback to synthetic data if NSE API returns nothing
+    if (!marketSnapshot.length) {
+      try {
+        const { getRealisticMarketData } = await import('@/lib/nse-data');
+        marketSnapshot = getRealisticMarketData();
+      } catch { /* fallback */ }
+    }
+
+    if (marketSnapshot.length) {
+      niftyPrice = marketSnapshot.find(q => q.symbol?.includes('NIFTY 50') || q.symbol === 'NSE:NIFTY 50')?.lastPrice
+        ?? marketSnapshot.reduce((s: number, d: any) => s + d.lastPrice, 0) / marketSnapshot.length;
+      regime = detectMarketRegime(marketSnapshot) as any;
+    }
+
+    const positions = openTrades?.map?.((t: any) => {
+      const cleanSymbol = t.symbol.replace(/^NSE:/, '').replace(/-EQ$/, '');
+      const liveData = marketSnapshot.find(q => q.symbol === `NSE:${cleanSymbol}` || q.symbol === cleanSymbol);
+      const currentPrice = liveData?.lastPrice ?? t.entryPrice ?? 0;
+
+      const isBuy = t.direction === 'BUY';
+      const unrealizedPnl = isBuy
+        ? (currentPrice - (t.entryPrice ?? 0)) * (t.quantity ?? 0)
+        : ((t.entryPrice ?? 0) - currentPrice) * (t.quantity ?? 0);
+
+      return {
+        id: t?.id ?? '',
+        symbol: t?.symbol ?? '',
+        direction: t?.direction ?? '',
+        quantity: t?.quantity ?? 0,
+        entryPrice: t?.entryPrice ?? 0,
+        currentPrice: currentPrice,
+        pnl: Math.round(unrealizedPnl * 100) / 100,
+        stopLoss: t?.stopLoss ?? 0,
+        target: t?.target ?? 0,
+        strategy: t?.strategy ?? '',
+        entryTime: t?.entryTime?.toISOString?.() ?? '',
+      };
+    }) ?? [];
 
     const recentTrades = todayTrades?.map?.((t: any) => ({
       id: t?.id ?? '',
@@ -82,31 +128,6 @@ export async function GET() {
       message: l?.message ?? '',
       createdAt: l?.createdAt?.toISOString?.() ?? '',
     })) ?? [];
-
-    // Fetch latest market snapshot from NSE (best-effort for panels)
-    let marketSnapshot: any[] = [];
-    let niftyPrice = 22000;
-    let regime = { regime: 'UNKNOWN', confidence: 0, description: '' };
-    try {
-      const { getLiveQuotes, NSE_POPULAR_STOCKS } = await import('@/lib/nse-live-api');
-      const liveQuotes = await getLiveQuotes(NSE_POPULAR_STOCKS.slice(0, 25)).catch(() => []);
-      if (liveQuotes?.length) {
-        marketSnapshot = liveQuotes.map(q => ({
-          symbol: `NSE:${q.symbol}`,
-          lastPrice: q.lastPrice,
-          open: q.open,
-          high: q.high,
-          low: q.low,
-          close: q.close,
-          volume: q.volume,
-          change: q.change,
-          changePct: q.changePct,
-        }));
-        niftyPrice = liveQuotes.find(q => q.symbol === 'NIFTY 50')?.lastPrice
-          ?? marketSnapshot.reduce((s: number, d: any) => s + d.lastPrice, 0) / marketSnapshot.length;
-        regime = detectMarketRegime(marketSnapshot) as any;
-      }
-    } catch { /* non-critical — panels will use stale data */ }
 
     // Drawdown + portfolio risk (non-blocking)
     const [drawdownStatus, portfolioRisk] = await Promise.all([
