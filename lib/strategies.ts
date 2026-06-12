@@ -460,6 +460,95 @@ export async function newsSentimentStrategy(
   }
 }
 
+// ===== Strategy 9: Institutional VWAP Pullback =====
+export function vwapPullbackStrategy(
+  data: MarketDataPoint[],
+  historyMap?: Map<string, HistoricalPrices>
+): TradeSignal[] {
+  const signals: TradeSignal[] = [];
+  for (const stock of (data ?? [])) {
+    const price = stock?.lastPrice ?? 0;
+    const volume = stock?.volume ?? 0;
+    const high = stock?.high ?? 0;
+    const low = stock?.low ?? 0;
+    if (price <= 0 || volume <= 0) continue;
+
+    // Check EMA 9/21 trend (Uptrend if EMA9 > EMA21)
+    const history = getPriceHistory(stock, historyMap, 25);
+    if (history.length < 21) continue;
+    const ema9 = ema(history, 9);
+    const ema21 = ema(history, 21);
+    const inUptrend = ema9 > ema21;
+    const inDowntrend = ema9 < ema21;
+
+    // VWAP approximation
+    const vwap = ((high + low + price) / 3);
+
+    // Buy pullbacks: In an uptrend, if price drops near or slightly below VWAP and starts bouncing
+    if (inUptrend && price <= vwap * 1.002 && price >= vwap * 0.995 && price > (stock?.open ?? 0)) {
+      signals.push({
+        symbol: stock?.symbol ?? '', exchange: 'NSE', direction: 'BUY', strategy: 'VWAP_PULLBACK',
+        confidence: 85, // Highly reliable quant setup
+        entryPrice: price, stopLoss: Math.min(low, price * 0.99), target: price * 1.02, quantity: 0,
+        reason: `VWAP Pullback: Price pulled back to VWAP (₹${vwap.toFixed(2)}) in strong uptrend (EMA9 > EMA21)`,
+      });
+    }
+
+    // Sell pullbacks: In a downtrend, if price rallies near or slightly above VWAP and starts reversing
+    if (inDowntrend && price >= vwap * 0.998 && price <= vwap * 1.005 && price < (stock?.open ?? 0)) {
+      signals.push({
+        symbol: stock?.symbol ?? '', exchange: 'NSE', direction: 'SELL', strategy: 'VWAP_PULLBACK',
+        confidence: 85,
+        entryPrice: price, stopLoss: Math.max(high, price * 1.01), target: price * 0.98, quantity: 0,
+        reason: `VWAP Pullback: Price rallied to VWAP (₹${vwap.toFixed(2)}) in strong downtrend (EMA9 < EMA21)`,
+      });
+    }
+  }
+  return signals;
+}
+
+// ===== Strategy 10: Institutional Volume Breakout (VSA) =====
+export function volumeBreakoutStrategy(
+  data: MarketDataPoint[],
+  historyMap?: Map<string, HistoricalPrices>
+): TradeSignal[] {
+  const signals: TradeSignal[] = [];
+  for (const stock of (data ?? [])) {
+    const price = stock?.lastPrice ?? 0;
+    const volume = stock?.volume ?? 0;
+    if (price <= 0 || volume <= 0) continue;
+
+    if (!historyMap) continue;
+    const hist = historyMap.get(stock.symbol);
+    if (!hist || hist.closes?.length < 20 || !hist.volumes) continue;
+
+    const avgVolume = sma(hist.volumes, 20);
+    const maxClose = Math.max(...hist.closes.slice(-20, -1)); // 20-period resistance
+    const minClose = Math.min(...hist.closes.slice(-20, -1)); // 20-period support
+
+    const isUnusualVolume = volume > avgVolume * 2.5;
+
+    if (isUnusualVolume && price > maxClose) {
+      signals.push({
+        symbol: stock?.symbol ?? '', exchange: 'NSE', direction: 'BUY', strategy: 'VOLUME_BREAKOUT',
+        confidence: 90, // Institutional breakout
+        entryPrice: price, stopLoss: price * 0.985, target: price * 1.03, quantity: 0,
+        reason: `Volume Breakout: Price broke above 20-day resistance (₹${maxClose.toFixed(2)}) on volume ${(volume / avgVolume).toFixed(1)}x average`,
+      });
+    }
+
+    if (isUnusualVolume && price < minClose) {
+      signals.push({
+        symbol: stock?.symbol ?? '', exchange: 'NSE', direction: 'SELL', strategy: 'VOLUME_BREAKOUT',
+        confidence: 90,
+        entryPrice: price, stopLoss: price * 1.015, target: price * 0.97, quantity: 0,
+        reason: `Volume Breakdown: Price broke below 20-day support (₹${minClose.toFixed(2)}) on volume ${(volume / avgVolume).toFixed(1)}x average`,
+      });
+    }
+  }
+  return signals;
+}
+
 // ===== Export all strategy runner =====
 export function runAllStrategies(
   data: MarketDataPoint[],
@@ -474,6 +563,8 @@ export function runAllStrategies(
   if (enabledStrategies?.supertrend !== false) signals = [...signals, ...supertrendStrategy(data, historyMap)];
   if (enabledStrategies?.vwap !== false) signals = [...signals, ...vwapStrategy(data)];
   if (enabledStrategies?.emaCross !== false) signals = [...signals, ...emaCrossoverStrategy(data, historyMap)];
+  if (enabledStrategies?.vwapPullback !== false) signals = [...signals, ...vwapPullbackStrategy(data, historyMap)];
+  if (enabledStrategies?.volBreakout !== false) signals = [...signals, ...volumeBreakoutStrategy(data, historyMap)];
   return signals;
 }
 
@@ -486,5 +577,7 @@ export const ALL_STRATEGIES = [
   { key: 'supertrend', name: 'Supertrend', desc: 'ATR-based trend following indicator' },
   { key: 'vwap', name: 'VWAP', desc: 'Volume-weighted average price mean reversion' },
   { key: 'emaCross', name: 'EMA Crossover', desc: 'EMA 9/21 golden/death cross signals' },
+  { key: 'vwapPullback', name: 'VWAP Pullback', desc: 'VWAP pullbacks in strong EMA trends (Quant Favorite)' },
+  { key: 'volBreakout', name: 'Volume Breakout', desc: 'Volume-spread breakouts of 20-day high/low range (Institutional)' },
   { key: 'newsSentiment', name: 'News Sentiment', desc: 'AI-powered news analysis for trading signals' },
 ];

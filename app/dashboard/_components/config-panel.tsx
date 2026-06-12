@@ -185,6 +185,20 @@ export function ConfigPanel() {
             />
           </div>
           <div className="flex items-center justify-between">
+            <Label className="text-xs">VWAP Pullback Strategy</Label>
+            <Switch
+              checked={config?.enableVwapPullback ?? true}
+              onCheckedChange={(checked: boolean) => updateField('enableVwapPullback', checked)}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Label className="text-xs">Volume Breakout Strategy</Label>
+            <Switch
+              checked={config?.enableVolBreakout ?? true}
+              onCheckedChange={(checked: boolean) => updateField('enableVolBreakout', checked)}
+            />
+          </div>
+          <div className="flex items-center justify-between">
             <Label className="text-xs">News Sentiment Strategy</Label>
             <Switch
               checked={config?.enableNewsSentiment ?? true}

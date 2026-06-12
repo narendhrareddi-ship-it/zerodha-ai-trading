@@ -124,7 +124,7 @@ export async function runSignalAgent(
       strategy: vr.strategies.join('+'),
       rawStrategyConfidence: vr.avgConfidence,
       voteCount: vr.voteCount,
-      totalStrategies: 8,
+      totalStrategies: 10,
       xgb,
       regime,
       features,

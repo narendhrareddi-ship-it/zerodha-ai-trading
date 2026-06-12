@@ -67,6 +67,8 @@ model TradingConfig {
   enableSupertrend  Boolean  @default(true)
   enableVWAP        Boolean  @default(true)
   enableEMACross    Boolean  @default(true)
+  enableVwapPullback Boolean @default(true)
+  enableVolBreakout  Boolean @default(true)
   telegramChatId    String?  @default("")
   enableTelegram    Boolean  @default(false)
   kiteApiKey        String?  @default("")

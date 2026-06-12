@@ -227,6 +227,8 @@ async function runScanForUser(userId: string, startTime: number): Promise<NextRe
       supertrend: config?.enableSupertrend !== false,
       vwap: config?.enableVWAP !== false,
       emaCross: config?.enableEMACross !== false,
+      vwapPullback: config?.enableVwapPullback !== false,
+      volBreakout: config?.enableVolBreakout !== false,
     };
 
     const strategyWeights = await getStrategyWeightsFromDb(userId);

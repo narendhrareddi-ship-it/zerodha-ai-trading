@@ -44,6 +44,8 @@ const strategyWeights: Record<string, number> = {
   EMA_CROSS: 1.0,
   NEWS_SENTIMENT: 1.0,
   XGBOOST: 1.0,
+  VWAP_PULLBACK: 1.0,
+  VOLUME_BREAKOUT: 1.0,
 };
 
 export function getStrategyWeights(): Record<string, number> {

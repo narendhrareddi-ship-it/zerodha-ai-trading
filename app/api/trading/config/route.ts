@@ -41,6 +41,8 @@ export async function PUT(request: NextRequest) {
         enableSupertrend: body?.enableSupertrend ?? true,
         enableVWAP: body?.enableVWAP ?? true,
         enableEMACross: body?.enableEMACross ?? true,
+        enableVwapPullback: body?.enableVwapPullback ?? true,
+        enableVolBreakout: body?.enableVolBreakout ?? true,
         stopLossPercent: body?.stopLossPercent ?? 1.0,
         targetPercent: body?.targetPercent ?? 2.0,
         ...(body?.brokerType !== undefined ? { brokerType: body.brokerType } : {}),
