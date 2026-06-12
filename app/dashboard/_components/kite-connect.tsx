@@ -19,14 +19,18 @@ export function KiteConnect() {
   const fetchStatus = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/kite/status');
+      const res = await fetch('/api/trading/broker/status');
       if (res?.ok) {
         const data = await res.json();
         setStatus(data);
       }
     } catch (err: any) {
-      console.error('Kite status error:', err?.message);
+      console.error('Broker status error:', err?.message);
     } finally {
+      setStatus((prev: any) => {
+        if (!prev) return { connected: false, brokerType: 'kite' };
+        return prev;
+      });
       setLoading(false);
     }
   };
@@ -73,31 +77,55 @@ export function KiteConnect() {
   };
 
   const isConnected = status?.connected ?? false;
+  const brokerType = status?.brokerType ?? 'kite';
   const platformConfigured = status?.platformConfigured !== false;
+
+  const brokerNames: Record<string, string> = {
+    kite: 'Zerodha Kite Connect',
+    fyers: 'Fyers API v3',
+    kotak: 'Kotak Neo API',
+    openalgo: 'OpenAlgo Bridge',
+  };
+
+  const brokerLogos: Record<string, string> = {
+    kite: '🔴',
+    fyers: '🟡',
+    kotak: '🟠',
+    openalgo: '🔵',
+  };
 
   return (
     <Card className="lg:col-span-2">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-lg">
-          <Link2 className="w-5 h-5 text-primary" />
-          Zerodha Live Trading
+          <span className="text-xl">{brokerLogos[brokerType] || '🔌'}</span>
+          {brokerNames[brokerType] || 'Broker'} Connection Status
         </CardTitle>
         <CardDescription>
-          Connect your Zerodha account for live trading — no API subscription needed from you!
+          {brokerType === 'kite' 
+            ? 'Connect your Zerodha account for live trading — no API subscription needed from you!'
+            : `Verify configuration and check balance for your direct ${brokerNames[brokerType]} broker connection.`
+          }
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Free Access Banner */}
+        {/* Dynamic Free Access Banner */}
         <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-500/10 via-primary/5 to-blue-500/10 border border-emerald-500/20">
           <div className="flex items-start gap-3">
             <div className="p-2 rounded-lg bg-emerald-500/20">
               <Zap className="w-5 h-5 text-emerald-400" />
             </div>
             <div className="space-y-1">
-              <p className="text-sm font-semibold text-foreground">100% Free for All Users</p>
+              <p className="text-sm font-semibold text-foreground">
+                {brokerType === 'fyers' ? 'Fyers Integration: 100% Free API Execution' : 'Autonomous Trading Integration'}
+              </p>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Unlike other platforms, you don&apos;t need to buy a Kite Connect API subscription (₹2,000/month). 
-                Just log in with your regular Zerodha credentials and start live trading instantly.
+                {brokerType === 'fyers'
+                  ? 'Fyers does not charge any monthly fee for API order execution. Your real money balance is loaded automatically to size positions according to the Half-Kelly criterion.'
+                  : brokerType === 'kite'
+                  ? 'Unlike other platforms, you do not need to buy a Kite Connect API subscription (₹2,000/month). Just log in with your regular Zerodha credentials and start live trading instantly.'
+                  : 'Automated execution engine sizes positions dynamically according to risk criteria and live available capital.'
+                }
               </p>
             </div>
           </div>
@@ -110,8 +138,8 @@ export function KiteConnect() {
               <ExternalLink className="w-3.5 h-3.5 text-primary" />
             </div>
             <div>
-              <p className="text-xs font-medium">1. Connect</p>
-              <p className="text-[11px] text-muted-foreground">Click button below & log in to Zerodha</p>
+              <p className="text-xs font-medium">1. Set Broker</p>
+              <p className="text-[11px] text-muted-foreground">Select active broker in connection settings</p>
             </div>
           </div>
           <div className="p-3 rounded-lg bg-muted/30 flex items-start gap-2.5">
@@ -119,8 +147,8 @@ export function KiteConnect() {
               <Shield className="w-3.5 h-3.5 text-primary" />
             </div>
             <div>
-              <p className="text-xs font-medium">2. Authorize</p>
-              <p className="text-[11px] text-muted-foreground">Grant permission to execute trades</p>
+              <p className="text-xs font-medium">2. Authenticate</p>
+              <p className="text-[11px] text-muted-foreground">Input API tokens or login to establish session</p>
             </div>
           </div>
           <div className="p-3 rounded-lg bg-muted/30 flex items-start gap-2.5">
@@ -129,7 +157,7 @@ export function KiteConnect() {
             </div>
             <div>
               <p className="text-xs font-medium">3. Trade Live</p>
-              <p className="text-[11px] text-muted-foreground">Bot executes real trades on your account</p>
+              <p className="text-[11px] text-muted-foreground">Bot executes real trades using actual funds</p>
             </div>
           </div>
         </div>
@@ -149,19 +177,19 @@ export function KiteConnect() {
             </Button>
           </div>
 
-          {isConnected && status?.profile?.user_name && (
+          {isConnected && status?.profileName && (
             <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm">Logged in as: <strong>{status.profile.user_name}</strong></p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Zerodha User ID: {status.profile.user_id ?? 'N/A'}</p>
+                  <p className="text-sm">Logged in as: <strong>{status.profileName}</strong></p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{brokerNames[brokerType]} ID: {status.profileId ?? 'N/A'}</p>
                 </div>
                 <ShieldCheck className="w-5 h-5 text-emerald-400" />
               </div>
             </div>
           )}
 
-          {!isConnected && platformConfigured && (
+          {!isConnected && brokerType === 'kite' && platformConfigured && (
             <>
               <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 text-xs space-y-1">
                 <p className="font-medium text-foreground flex items-center gap-1.5">
@@ -211,25 +239,32 @@ export function KiteConnect() {
             </>
           )}
 
-          {!platformConfigured && (
+          {!isConnected && brokerType === 'fyers' && (
+            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-400 leading-relaxed">
+              <Info className="w-4 h-4 inline mr-1.5 align-text-bottom" />
+              Fyers token is missing or expired. Please generate a new access token using the fyers-token utility and paste it in Settings above.
+            </div>
+          )}
+
+          {!isConnected && brokerType === 'kite' && !platformConfigured && (
             <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-400">
               <Info className="w-4 h-4 inline mr-1" />
               Platform Kite API is not configured. Please contact the administrator.
             </div>
           )}
 
-          {isConnected && status?.margins && (
+          {isConnected && (status?.availableMargin !== undefined || status?.margins) && (
             <div className="grid grid-cols-2 gap-3">
               <div className="p-3 rounded-lg bg-muted/30">
                 <p className="text-xs text-muted-foreground">Available Margin</p>
                 <p className="font-mono font-bold text-sm">
-                  ₹{(status?.margins?.equity?.available?.cash ?? 0)?.toLocaleString?.('en-IN') ?? '0'}
+                  ₹{(status?.availableMargin ?? 0)?.toLocaleString?.('en-IN') ?? '0'}
                 </p>
               </div>
               <div className="p-3 rounded-lg bg-muted/30">
                 <p className="text-xs text-muted-foreground">Used Margin</p>
                 <p className="font-mono font-bold text-sm">
-                  ₹{(status?.margins?.equity?.utilised?.debits ?? 0)?.toLocaleString?.('en-IN') ?? '0'}
+                  ₹{(status?.usedMargin ?? 0)?.toLocaleString?.('en-IN') ?? '0'}
                 </p>
               </div>
             </div>
@@ -241,7 +276,7 @@ export function KiteConnect() {
           <div className="p-3 rounded-lg bg-muted/20 border border-border/50">
             <p className="text-xs text-muted-foreground">
               <strong className="text-foreground">Paper Trading Active:</strong> The bot is running in simulation mode with virtual data. 
-              Connect your Zerodha account above to switch to live trading with real market data and order execution.
+              Configure your credentials above to switch to live trading with real market execution.
             </p>
           </div>
         )}
