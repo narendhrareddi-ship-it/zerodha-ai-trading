@@ -111,13 +111,11 @@ export async function runRiskManagerAgent(
   // 5. Get user performance stats for dynamic sizing
   const config = await prisma.tradingConfig.findUnique({ where: { userId } });
   
+  // Fetch live capital balance if a broker account is connected
   let capital = config?.capitalAmount ?? 10000;
-  const isLive = await checkIsLive(userId, config);
-  if (isLive) {
-    const realBalance = await getRealBrokerBalance(userId, config);
-    if (realBalance !== null && realBalance > 0) {
-      capital = realBalance;
-    }
+  const realBalance = await getRealBrokerBalance(userId, config);
+  if (realBalance !== null && realBalance > 0) {
+    capital = realBalance;
   }
 
   const recentTrades = await prisma.trade.findMany({
@@ -184,12 +182,16 @@ export async function runRiskManagerAgent(
     let sizingDetails: ReturnType<typeof calculateDynamicRiskSize>;
 
     if (features) {
+      let baseRiskPercent = 1.0;
+      if (config?.positionSizing === 'fixed') baseRiskPercent = 0.5;
+      else if (config?.positionSizing === 'kelly') baseRiskPercent = 2.0;
+
       sizingDetails = calculateDynamicRiskSize({
         capital,
         entryPrice: signal.entryPrice,
         stopLoss: signal.stopLoss,
         direction: signal.direction,
-        baseRiskPercent: 1.0,
+        baseRiskPercent,
         maxPositionPercent: 15,
         features,
         regime: regimeResult.enhancedRegime as any,
@@ -218,7 +220,9 @@ export async function runRiskManagerAgent(
       };
     }
 
-    // Pearson Correlation-Aware Position Sizing Scaling
+    // Pearson Correlation-Aware Risk Parity Sizing
+    let totalCorrelation = 0;
+    let correlationCount = 0;
     let maxCorrelation = 0;
     let correlatedAsset = '';
     
@@ -229,6 +233,8 @@ export async function runRiskManagerAgent(
           const openHist = historyMap.get(openTrade.symbol);
           if (openHist && openHist.closes) {
             const corr = Math.abs(calculatePearsonCorrelation(signalHist.closes, openHist.closes));
+            totalCorrelation += corr;
+            correlationCount++;
             if (corr > maxCorrelation) {
               maxCorrelation = corr;
               correlatedAsset = openTrade.symbol;
@@ -238,9 +244,23 @@ export async function runRiskManagerAgent(
       }
     }
 
-    if (maxCorrelation > 0.65) {
-      warnings.push(`High correlation (${maxCorrelation.toFixed(2)}) with open position in ${correlatedAsset}. Scaling down quantity by 50% to hedge sector risk.`);
-      sizingDetails.quantity = Math.max(1, Math.round(sizingDetails.quantity * 0.5));
+    const avgCorrelation = correlationCount > 0 ? totalCorrelation / correlationCount : 0;
+    if (avgCorrelation > 0.3) {
+      const multiplier = Math.round((1 - avgCorrelation * avgCorrelation) * 100) / 100;
+      if (multiplier < 0.95) {
+        warnings.push(`Risk Parity Sizing: Avg correlation with portfolio is ${avgCorrelation.toFixed(2)} (Max: ${maxCorrelation.toFixed(2)} in ${correlatedAsset}). Scaling quantity by ${Math.round(multiplier * 100)}% to minimize covariance risk.`);
+        sizingDetails.quantity = Math.max(1, Math.round(sizingDetails.quantity * multiplier));
+        sizingDetails.capitalAllocated = sizingDetails.quantity * signal.entryPrice;
+        sizingDetails.riskAmount = sizingDetails.quantity * Math.abs(signal.entryPrice - signal.stopLoss);
+      }
+    }
+
+    // Dynamic Liquidity Sizing: Capping order sizes at 1% of the 20-day Average Daily Volume (ADV)
+    const adv = features?.volumeMA20 ?? 100000;
+    const maxLiquidityQty = Math.max(1, Math.floor(adv * 0.01));
+    if (sizingDetails.quantity > maxLiquidityQty) {
+      warnings.push(`Dynamic Liquidity Sizing: Quantity capped at ${maxLiquidityQty} shares (1% of 20-day ADV: ${adv.toFixed(0)}) to prevent market impact (requested: ${sizingDetails.quantity}).`);
+      sizingDetails.quantity = maxLiquidityQty;
       sizingDetails.capitalAllocated = sizingDetails.quantity * signal.entryPrice;
       sizingDetails.riskAmount = sizingDetails.quantity * Math.abs(signal.entryPrice - signal.stopLoss);
     }

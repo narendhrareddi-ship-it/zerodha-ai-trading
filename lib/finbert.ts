@@ -41,6 +41,7 @@ async function callHuggingFace(texts: string[]): Promise<SentimentResult[]> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ inputs: texts, parameters: { top_k: 3 } }),
+    signal: AbortSignal.timeout(3000), // 3-second timeout
   });
 
   if (!response?.ok) {

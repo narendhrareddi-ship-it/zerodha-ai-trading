@@ -78,7 +78,7 @@ async function main() {
     data: {
       level: 'INFO',
       source: 'SYSTEM',
-      message: 'Trading system initialized. Welcome to ZerodhaAI!',
+      message: 'Trading system initialized. Welcome to H.E.R.M.E.S.!',
     },
   });
 

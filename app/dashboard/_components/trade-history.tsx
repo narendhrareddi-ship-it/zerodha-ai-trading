@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { History, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 
 interface Trade {
   id: string;
@@ -17,6 +18,7 @@ interface Trade {
   strategy: string;
   entryTime: string;
   exitTime: string | null;
+  notes?: string | null;
 }
 
 export function TradeHistory({ trades }: { trades: Trade[] }) {
@@ -72,8 +74,30 @@ export function TradeHistory({ trades }: { trades: Trade[] }) {
                     <TableCell className="text-right font-mono">
                       {trade?.exitPrice != null ? `₹${trade.exitPrice.toFixed(2)}` : '-'}
                     </TableCell>
-                    <TableCell className={`text-right font-mono font-bold ${(trade?.pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                      {trade?.pnl != null ? `₹${trade.pnl.toFixed(2)}` : '-'}
+                    <TableCell className="text-right font-mono">
+                      {trade?.pnl != null ? (
+                        trade.notes ? (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className={`cursor-help border-b border-dashed border-muted-foreground/40 font-bold ${(trade?.pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                  ₹{trade.pnl.toFixed(2)}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="bg-popover border text-popover-foreground p-3 max-w-[280px]">
+                                <div className="text-xs font-mono space-y-1">
+                                  <p className="font-semibold text-xs border-b pb-1 mb-1 text-primary">Trade Details & Fees</p>
+                                  <p className="whitespace-pre-wrap text-muted-foreground leading-relaxed">{trade.notes}</p>
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          <span className={`font-bold ${(trade?.pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            ₹{trade.pnl.toFixed(2)}
+                          </span>
+                        )
+                      ) : '-'}
                     </TableCell>
                     <TableCell>
                       <Badge variant={trade?.status === 'OPEN' ? 'default' : 'secondary'} className="text-xs">

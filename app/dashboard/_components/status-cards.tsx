@@ -53,71 +53,93 @@ export const StatusCards = memo(function StatusCards({ dailyPnl, openPositions, 
 
   const cards = [
     {
-      title: "Today's P&L",
+      title: "Today's Net P&L",
       value: <AnimatedNumber value={dailyPnl ?? 0} prefix="₹" decimals={2} />,
       icon: pnlPositive ? TrendingUp : TrendingDown,
-      color: pnlPositive ? 'text-green-400' : 'text-red-400',
-      bgColor: pnlPositive ? 'bg-green-400/10' : 'bg-red-400/10',
+      color: pnlPositive ? 'text-emerald-400' : 'text-rose-400',
+      bgColor: pnlPositive ? 'bg-emerald-500/10' : 'bg-rose-500/10',
+      glowClass: pnlPositive ? 'glow-emerald border-emerald-500/30 bg-[#061a10]/40' : 'glow-rose border-rose-500/30 bg-[#1a060a]/40',
+      subtitle: pnlPositive ? 'PROFIT GAINED' : 'LOSS ENCOUNTERED',
     },
     {
-      title: 'Open Positions',
+      title: 'Active Positions',
       value: <AnimatedNumber value={openPositions ?? 0} />,
       icon: BarChart3,
-      color: 'text-blue-400',
-      bgColor: 'bg-blue-400/10',
+      color: 'text-cyan-400',
+      bgColor: 'bg-cyan-500/10',
+      glowClass: 'glow-cyan border-cyan-500/30 bg-[#061226]/40',
+      subtitle: 'MARKET EXPOSURE',
     },
     {
-      title: 'Total Trades',
+      title: 'Total Executions',
       value: <AnimatedNumber value={totalTrades ?? 0} />,
       icon: Target,
-      color: 'text-yellow-400',
-      bgColor: 'bg-yellow-400/10',
+      color: 'text-amber-400',
+      bgColor: 'bg-amber-500/10',
+      glowClass: 'border-amber-500/20 bg-amber-950/10',
+      subtitle: 'SESSION FILLED',
     },
     {
-      title: 'Win Rate',
+      title: 'Calculated Win Rate',
       value: <AnimatedNumber value={winRate ?? 0} suffix="%" decimals={1} />,
       icon: TrendingUp,
-      color: 'text-purple-400',
-      bgColor: 'bg-purple-400/10',
+      color: 'text-violet-400',
+      bgColor: 'bg-violet-500/10',
+      glowClass: 'glow-violet border-violet-500/30 bg-[#120626]/40',
+      subtitle: 'STATISTICAL EDGE',
     },
     {
-      title: 'Capital',
+      title: 'Available Capital',
       value: <AnimatedNumber value={capital ?? 0} prefix="₹" decimals={0} />,
       icon: Wallet,
       color: 'text-emerald-400',
-      bgColor: 'bg-emerald-400/10',
+      bgColor: 'bg-emerald-500/10',
+      glowClass: 'border-emerald-500/20 bg-emerald-950/10',
+      subtitle: 'LIQUID COLLATERAL',
     },
     {
-      title: 'Risk Status',
+      title: 'Risk Guard Status',
       value: (
-        <div className="space-y-1">
-          <span className="font-mono font-bold text-sm">₹{lossUsed?.toFixed?.(0) ?? '0'} / ₹{maxDailyLoss ?? 500}</span>
-          <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+        <div className="space-y-1 w-full">
+          <div className="flex justify-between items-center text-[10px] font-mono">
+            <span className="text-gray-400">USED LIMIT</span>
+            <span className={`${lossPercent > 80 ? 'text-rose-400' : 'text-emerald-400'}`}>₹{lossUsed?.toFixed?.(0) ?? '0'} / ₹{maxDailyLoss ?? 500}</span>
+          </div>
+          <div className="w-full h-1.5 bg-gray-900 rounded-full overflow-hidden border border-cyan-500/10">
             <div
-              className={`h-full rounded-full transition-all ${lossPercent > 80 ? 'bg-red-500' : lossPercent > 50 ? 'bg-yellow-500' : 'bg-green-500'}`}
+              className={`h-full rounded-full transition-all ${lossPercent > 80 ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e]' : lossPercent > 50 ? 'bg-amber-500 shadow-[0_0_8px_#f59e0b]' : 'bg-emerald-500 shadow-[0_0_8px_#10b981]'}`}
               style={{ width: `${Math.min(lossPercent, 100)}%` }}
             />
           </div>
         </div>
       ),
       icon: Shield,
-      color: lossPercent > 80 ? 'text-red-400' : 'text-green-400',
-      bgColor: lossPercent > 80 ? 'bg-red-400/10' : 'bg-green-400/10',
+      color: lossPercent > 80 ? 'text-rose-400' : 'text-emerald-400',
+      bgColor: lossPercent > 80 ? 'bg-rose-500/10' : 'bg-emerald-500/10',
+      glowClass: lossPercent > 80 ? 'glow-rose border-rose-500/40 bg-rose-950/10 animate-pulse' : 'border-emerald-500/20 bg-emerald-950/10',
+      subtitle: 'KILL-SWITCH DEFENSE',
     },
   ];
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
       {cards?.map?.((card: any, i: number) => (
-        <Card key={i} className="hover:shadow-lg transition-shadow duration-normal">
-          <CardContent className="pt-4 pb-4 px-4">
-            <div className="flex items-center gap-2 mb-2">
-              <div className={`w-8 h-8 rounded-lg ${card?.bgColor ?? ''} flex items-center justify-center`}>
-                {card?.icon && <card.icon className={`w-4 h-4 ${card?.color ?? ''}`} />}
+        <Card key={i} className={`relative overflow-hidden transition-all duration-300 hover:scale-[1.02] border backdrop-blur-md ${card?.glowClass ?? ''}`}>
+          {/* Cyber-grid background layer inside cards */}
+          <div className="absolute inset-0 cyber-grid opacity-[0.15] pointer-events-none" />
+          
+          <CardContent className="pt-4 pb-3 px-4 relative z-10 flex flex-col justify-between h-full min-h-[96px]">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] uppercase font-mono tracking-widest text-muted-foreground">{card?.title ?? ''}</span>
+              <div className={`w-7 h-7 rounded ${card?.bgColor ?? ''} flex items-center justify-center`}>
+                {card?.icon && <card.icon className={`w-3.5 h-3.5 ${card?.color ?? ''}`} />}
               </div>
-              <span className="text-xs text-muted-foreground">{card?.title ?? ''}</span>
             </div>
-            <div className={`text-lg ${card?.color ?? ''}`}>{card?.value}</div>
+            
+            <div className="space-y-1">
+              <div className={`text-xl font-bold font-mono tracking-tight ${card?.color ?? ''}`}>{card?.value}</div>
+              <div className="text-[8px] font-mono tracking-wider text-muted-foreground uppercase">{card?.subtitle}</div>
+            </div>
           </CardContent>
         </Card>
       )) ?? null}

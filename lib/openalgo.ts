@@ -51,7 +51,7 @@ export class OpenAlgoClient {
   async placeOrder(order: OpenAlgoOrder): Promise<any> {
     return this.request('/api/v1/placeorder', 'POST', {
       apikey: this.apiKey,
-      strategy: order.strategy ?? 'ZerodhaAI',
+      strategy: order.strategy ?? 'HERMES',
       symbol: order.symbol,
       exchange: order.exchange,
       action: order.action,
@@ -66,7 +66,7 @@ export class OpenAlgoClient {
   async placeSmartOrder(order: OpenAlgoOrder & { position_size: number }): Promise<any> {
     return this.request('/api/v1/placesmartorder', 'POST', {
       apikey: this.apiKey,
-      strategy: order.strategy ?? 'ZerodhaAI',
+      strategy: order.strategy ?? 'HERMES',
       symbol: order.symbol,
       exchange: order.exchange,
       action: order.action,
@@ -82,7 +82,7 @@ export class OpenAlgoClient {
   async cancelOrder(orderId: string, strategy?: string): Promise<any> {
     return this.request('/api/v1/cancelorder', 'POST', {
       apikey: this.apiKey,
-      strategy: strategy ?? 'ZerodhaAI',
+      strategy: strategy ?? 'HERMES',
       orderid: orderId,
     });
   }
@@ -90,14 +90,14 @@ export class OpenAlgoClient {
   async cancelAllOrders(strategy?: string): Promise<any> {
     return this.request('/api/v1/cancelallorder', 'POST', {
       apikey: this.apiKey,
-      strategy: strategy ?? 'ZerodhaAI',
+      strategy: strategy ?? 'HERMES',
     });
   }
 
   async closePosition(symbol: string, exchange: string, product: string): Promise<any> {
     return this.request('/api/v1/closeposition', 'POST', {
       apikey: this.apiKey,
-      strategy: 'ZerodhaAI',
+      strategy: 'HERMES',
       symbol,
       exchange,
       product,

@@ -4,6 +4,7 @@
 // to produce overfitting-resistant strategy configurations.
 
 import type { CandleData } from './historical-data';
+import { calculateIntradayTaxes } from './taxes-estimator';
 
 export interface StrategyParams {
   rsiOversold: number;      // Default: 30
@@ -142,11 +143,24 @@ function simulateStrategy(
     if (strategy === 'bollinger' && price > bbUpper) signal = 'SELL';
 
     if (signal && price > 0) {
-      const returnPct = signal === 'BUY'
-        ? (nextPrice - price) / price
-        : (price - nextPrice) / price;
-      trades.push({ pnl: returnPct });
-      equity *= (1 + returnPct);
+      // Model exit slippage (0.05%)
+      const adjustedNextPrice = signal === 'BUY'
+        ? nextPrice * 0.9995
+        : nextPrice * 1.0005;
+
+      const qty = 100; // Simulated constant quantity to compute tax percentage
+      const taxes = calculateIntradayTaxes(
+        price,
+        adjustedNextPrice,
+        qty,
+        signal === 'BUY' ? 'BUY' : 'SELL',
+        'kite'
+      );
+      
+      const netReturnPct = taxes.netPnl / (price * qty);
+
+      trades.push({ pnl: netReturnPct });
+      equity *= (1 + netReturnPct);
       peakEquity = Math.max(peakEquity, equity);
       const dd = (peakEquity - equity) / peakEquity;
       maxDrawdown = Math.max(maxDrawdown, dd);

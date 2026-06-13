@@ -340,19 +340,73 @@ export async function executeOrder(params: ExecutionParams): Promise<ExecutionRe
 
   // Paper trading — log only
   if (paperTrading) {
+    const totalQuantity = signal.quantity;
+    if (chunkOrders && totalQuantity > maxChunkSize) {
+      const chunks: ChunkResult[] = [];
+      let remaining = totalQuantity;
+      let chunkIndex = 0;
+      let totalFilled = 0;
+      const dynamicChunkSize = Math.max(1, Math.min(maxChunkSize, Math.ceil(totalQuantity / 10)));
+
+      while (remaining > 0) {
+        const chunkQty = Math.min(dynamicChunkSize, remaining);
+        // Simulate minor passive limit fill slippage (random between -0.02% and +0.02%)
+        const randomSlippage = (Math.random() - 0.5) * 0.0004;
+        const price = signal.entryPrice * (1 + randomSlippage);
+
+        chunks.push({
+          chunkIndex,
+          quantity: chunkQty,
+          price: Math.round(price * 100) / 100,
+          success: true,
+        });
+
+        totalFilled += chunkQty;
+        remaining -= chunkQty;
+        chunkIndex++;
+
+        // Fast delay to simulate tick slices in logs
+        await new Promise(r => setTimeout(r, 50));
+      }
+
+      const avgPrice = chunks.reduce((s, c) => s + c.price * c.quantity, 0) / totalQuantity;
+      const slippagePct = Math.abs(avgPrice - signal.entryPrice) / signal.entryPrice * 100;
+
+      await prisma.tradingLog.create({
+        data: {
+          level: 'INFO',
+          source: 'SMART_EXECUTION',
+          message: `[PAPER] TWAP Sliced: ${totalFilled}/${totalQuantity} filled passively in ${chunks.length} simulated chunks`,
+          data: JSON.stringify({ signal, chunks }),
+        },
+      });
+
+      return {
+        success: true,
+        paperTrade: true,
+        actualEntryPrice: Math.round(avgPrice * 100) / 100,
+        actualQuantity: totalFilled,
+        slippagePct: Math.round(slippagePct * 1000) / 1000,
+        reason: 'Simulated TWAP passive execution chunks complete',
+        chunks,
+      };
+    }
+
+    // Default single-order paper trade
     await prisma.tradingLog.create({
       data: {
         level: 'INFO',
         source: 'SMART_EXECUTION',
-        message: `[PAPER] ${signal.direction} ${signal.quantity} ${signal.symbol} @ ₹${signal.entryPrice}`,
+        message: `[PAPER] Passive Order placed: ${signal.direction} ${totalQuantity} ${signal.symbol} @ ₹${signal.entryPrice}`,
         data: JSON.stringify({ signal, paperTrade: true }),
       },
     });
+
     return {
       success: true,
       paperTrade: true,
       actualEntryPrice: signal.entryPrice,
-      actualQuantity: signal.quantity,
+      actualQuantity: totalQuantity,
       slippagePct: 0,
       reason: 'Paper trade executed (no real order placed)',
     };

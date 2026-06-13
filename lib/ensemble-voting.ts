@@ -38,7 +38,9 @@ export function ensembleVote(
   const results: VotingResult[] = [];
 
   for (const [key, groupSignals] of Object.entries(groups)) {
-    const [symbol, direction] = key.split(':');
+    const lastColonIdx = key.lastIndexOf(':');
+    const symbol = key.slice(0, lastColonIdx);
+    const direction = key.slice(lastColonIdx + 1) as 'BUY' | 'SELL';
     const uniqueStrategies = [...new Set(groupSignals.map(s => s.strategy))];
     const voteCount = uniqueStrategies.length;
 

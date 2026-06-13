@@ -152,13 +152,13 @@ function calculateAtrSLTarget(
       if (atr > 0 && atr < price * 0.1) {
         if (direction === 'BUY') {
           return {
-            stopLoss: Math.round(Math.max(price - 2.0 * atr, price * 0.95) * 100) / 100,
-            target: Math.round((price + 3.5 * atr) * 100) / 100
+            stopLoss: Math.round(Math.max(price - 1.2 * atr, price * 0.95) * 100) / 100,
+            target: Math.round((price + 2.0 * atr) * 100) / 100
           };
         } else {
           return {
-            stopLoss: Math.round(Math.min(price + 2.0 * atr, price * 1.05) * 100) / 100,
-            target: Math.round((price - 3.5 * atr) * 100) / 100
+            stopLoss: Math.round(Math.min(price + 1.2 * atr, price * 1.05) * 100) / 100,
+            target: Math.round((price - 2.0 * atr) * 100) / 100
           };
         }
       }
@@ -184,25 +184,55 @@ function verifyMtfCoherence(
 ): boolean {
   if (!historyMap) return true;
   const hist = historyMap.get(stock.symbol);
-  if (!hist || !hist.closes || hist.closes.length < 50) return true;
+  if (!hist || !hist.closes) return true;
   const closes = hist.closes;
-  const sma50 = sma(closes, 50);
   const price = stock.lastPrice;
+
+  if (closes.length < 100) {
+    const sma50 = sma(closes, Math.min(closes.length, 50));
+    if (direction === 'BUY') {
+      return price > sma50;
+    } else {
+      return price < sma50;
+    }
+  }
+
+  const sma50 = sma(closes, 50);
+  const sma100 = sma(closes, 100);
   if (direction === 'BUY') {
-    return price > sma50;
+    return price > sma50 && price > sma100;
   } else {
-    return price < sma50;
+    return price < sma50 && price < sma100;
   }
 }
 
 // ===== Strategy 1: Momentum Trading =====
-export function momentumStrategy(data: MarketDataPoint[]): TradeSignal[] {
+export function momentumStrategy(
+  data: MarketDataPoint[],
+  historyMap?: Map<string, HistoricalPrices>
+): TradeSignal[] {
   const signals: TradeSignal[] = [];
   for (const stock of (data ?? [])) {
     const changePct = stock?.changePct ?? 0;
     const price = stock?.lastPrice ?? 0;
     const volume = stock?.volume ?? 0;
     if (price <= 0) continue;
+
+    // Bollinger Squeeze Guard: block momentum signals if volatility bandwidth is in a tight squeeze
+    if (historyMap) {
+      const hist = historyMap.get(stock.symbol);
+      if (hist && hist.closes && hist.closes.length >= 20) {
+        const period = 20;
+        const middle = sma(hist.closes, period);
+        const sd = stdDev(hist.closes, period);
+        if (middle > 0) {
+          const bandwidth = (4.0 * sd) / middle;
+          if (bandwidth < 0.015) {
+            continue; // Skip: low volatility consolidation squeeze
+          }
+        }
+      }
+    }
 
     if (changePct > 1.5 && volume > 100000) {
       signals.push({
@@ -225,7 +255,11 @@ export function momentumStrategy(data: MarketDataPoint[]): TradeSignal[] {
 }
 
 // ===== Strategy 2: RSI-Based Entries (Real RSI from historical data) =====
-export function rsiStrategy(data: MarketDataPoint[], historyMap?: Map<string, HistoricalPrices>): TradeSignal[] {
+export function rsiStrategy(
+  data: MarketDataPoint[],
+  historyMap?: Map<string, HistoricalPrices>,
+  optimizedParamsMap?: Map<string, Map<string, any>>
+): TradeSignal[] {
   const signals: TradeSignal[] = [];
   for (const stock of (data ?? [])) {
     const price = stock?.lastPrice ?? 0;
@@ -233,11 +267,17 @@ export function rsiStrategy(data: MarketDataPoint[], historyMap?: Map<string, Hi
     const low = stock?.low ?? 0;
     if (price <= 0 || high <= low) continue;
 
-    // Calculate real RSI from historical close prices
-    const closes = getPriceHistory(stock, historyMap, 20);
-    const rsi = calculateRSI(closes, 14);
+    // Load custom params
+    const symbolParams = optimizedParamsMap?.get(stock.symbol)?.get('rsi');
+    const period = symbolParams?.rsiPeriod ?? 14;
+    const oversold = symbolParams?.rsiOversold ?? 30;
+    const overbought = symbolParams?.rsiOverbought ?? 70;
 
-    if (rsi < 30 && price > (stock?.open ?? 0)) {
+    // Calculate real RSI from historical close prices
+    const closes = getPriceHistory(stock, historyMap, period + 6);
+    const rsi = calculateRSI(closes, period);
+
+    if (rsi < oversold && price > (stock?.open ?? 0)) {
       signals.push({
         symbol: stock?.symbol ?? '', exchange: 'NSE', direction: 'BUY', strategy: 'RSI',
         confidence: Math.min(85, 70 - rsi),
@@ -245,7 +285,7 @@ export function rsiStrategy(data: MarketDataPoint[], historyMap?: Map<string, Hi
         reason: `Oversold bounce, RSI=${rsi?.toFixed?.(1)}, price recovering from low`,
       });
     }
-    if (rsi > 70 && price < (stock?.open ?? 0)) {
+    if (rsi > overbought && price < (stock?.open ?? 0)) {
       signals.push({
         symbol: stock?.symbol ?? '', exchange: 'NSE', direction: 'SELL', strategy: 'RSI',
         confidence: Math.min(85, rsi - 30),
@@ -258,23 +298,33 @@ export function rsiStrategy(data: MarketDataPoint[], historyMap?: Map<string, Hi
 }
 
 // ===== Strategy 3: MACD Crossover (Real historical data) =====
-export function macdStrategy(data: MarketDataPoint[], historyMap?: Map<string, HistoricalPrices>): TradeSignal[] {
+export function macdStrategy(
+  data: MarketDataPoint[],
+  historyMap?: Map<string, HistoricalPrices>,
+  optimizedParamsMap?: Map<string, Map<string, any>>
+): TradeSignal[] {
   const signals: TradeSignal[] = [];
   for (const stock of (data ?? [])) {
     const price = stock?.lastPrice ?? 0;
     if (price <= 0) continue;
-    const history = getPriceHistory(stock, historyMap, 30);
-    if (history.length < 26) continue;
 
-    const ema12 = ema(history, 12);
-    const ema26 = ema(history, 26);
+    // Load custom params
+    const symbolParams = optimizedParamsMap?.get(stock.symbol)?.get('macd');
+    const fast = symbolParams?.macdFast ?? 12;
+    const slow = symbolParams?.macdSlow ?? 26;
+
+    const history = getPriceHistory(stock, historyMap, slow + 4);
+    if (history.length < slow) continue;
+
+    const ema12 = ema(history, fast);
+    const ema26 = ema(history, slow);
     const macdLine = ema12 - ema26;
     const macdPct = (macdLine / price) * 100;
 
     // Previous MACD for crossover detection
     const prevHistory = history.slice(0, -1);
-    const prevEma12 = ema(prevHistory, 12);
-    const prevEma26 = ema(prevHistory, 26);
+    const prevEma12 = ema(prevHistory, fast);
+    const prevEma26 = ema(prevHistory, slow);
     const prevMacd = prevEma12 - prevEma26;
 
     // Bullish crossover: MACD crosses above signal
@@ -300,18 +350,28 @@ export function macdStrategy(data: MarketDataPoint[], historyMap?: Map<string, H
 }
 
 // ===== Strategy 4: Bollinger Bands (Real historical data) =====
-export function bollingerBandsStrategy(data: MarketDataPoint[], historyMap?: Map<string, HistoricalPrices>): TradeSignal[] {
+export function bollingerBandsStrategy(
+  data: MarketDataPoint[],
+  historyMap?: Map<string, HistoricalPrices>,
+  optimizedParamsMap?: Map<string, Map<string, any>>
+): TradeSignal[] {
   const signals: TradeSignal[] = [];
   for (const stock of (data ?? [])) {
     const price = stock?.lastPrice ?? 0;
     if (price <= 0) continue;
-    const history = getPriceHistory(stock, historyMap, 20);
-    if (history.length < 20) continue;
 
-    const middle = sma(history, 20);
-    const sd = stdDev(history, 20);
-    const upper = middle + 2 * sd;
-    const lower = middle - 2 * sd;
+    // Load custom params
+    const symbolParams = optimizedParamsMap?.get(stock.symbol)?.get('bollinger');
+    const period = symbolParams?.bbPeriod ?? 20;
+    const deviation = symbolParams?.bbDeviation ?? 2.0;
+
+    const history = getPriceHistory(stock, historyMap, period + 4);
+    if (history.length < period) continue;
+
+    const middle = sma(history, period);
+    const sd = stdDev(history, period);
+    const upper = middle + deviation * sd;
+    const lower = middle - deviation * sd;
     const bandwidth = upper - lower;
     if (bandwidth <= 0) continue;
 
@@ -340,20 +400,27 @@ export function bollingerBandsStrategy(data: MarketDataPoint[], historyMap?: Map
 }
 
 // ===== Strategy 5: Supertrend (Real ATR from historical data) =====
-export function supertrendStrategy(data: MarketDataPoint[], historyMap?: Map<string, HistoricalPrices>): TradeSignal[] {
+export function supertrendStrategy(
+  data: MarketDataPoint[],
+  historyMap?: Map<string, HistoricalPrices>,
+  optimizedParamsMap?: Map<string, Map<string, any>>
+): TradeSignal[] {
   const signals: TradeSignal[] = [];
-  const multiplier = 3;
-
   for (const stock of (data ?? [])) {
     const price = stock?.lastPrice ?? 0;
     const high = stock?.high ?? 0;
     const low = stock?.low ?? 0;
     if (price <= 0 || high <= low) continue;
 
+    // Load custom params
+    const symbolParams = optimizedParamsMap?.get(stock.symbol)?.get('supertrend');
+    const atrPeriod = symbolParams?.rsiPeriod ?? 14; // use optimized rsiPeriod as atrPeriod fallback if we didn't split them in GMM config
+    const multiplier = symbolParams?.atrMultiplier ?? 3.0;
+
     // Calculate real ATR from historical high/low/close data
     const closes = getPriceHistory(stock, historyMap, 20);
     const { highs, lows } = getHighLowHistory(stock, historyMap, 20);
-    const atr = calculateATR(highs, lows, closes, 14);
+    const atr = calculateATR(highs, lows, closes, atrPeriod);
     const hl2 = (high + low) / 2;
     const upperBand = hl2 + multiplier * atr;
     const lowerBand = hl2 - multiplier * atr;
@@ -661,14 +728,15 @@ export function ofiVsaStrategy(
 export function runAllStrategies(
   data: MarketDataPoint[],
   enabledStrategies: Record<string, boolean>,
-  historyMap?: Map<string, HistoricalPrices>
+  historyMap?: Map<string, HistoricalPrices>,
+  optimizedParamsMap?: Map<string, Map<string, any>>
 ): TradeSignal[] {
   let signals: TradeSignal[] = [];
-  if (enabledStrategies?.momentum !== false) signals = [...signals, ...momentumStrategy(data)];
-  if (enabledStrategies?.rsi !== false) signals = [...signals, ...rsiStrategy(data, historyMap)];
-  if (enabledStrategies?.macd !== false) signals = [...signals, ...macdStrategy(data, historyMap)];
-  if (enabledStrategies?.bollinger !== false) signals = [...signals, ...bollingerBandsStrategy(data, historyMap)];
-  if (enabledStrategies?.supertrend !== false) signals = [...signals, ...supertrendStrategy(data, historyMap)];
+  if (enabledStrategies?.momentum !== false) signals = [...signals, ...momentumStrategy(data, historyMap)];
+  if (enabledStrategies?.rsi !== false) signals = [...signals, ...rsiStrategy(data, historyMap, optimizedParamsMap)];
+  if (enabledStrategies?.macd !== false) signals = [...signals, ...macdStrategy(data, historyMap, optimizedParamsMap)];
+  if (enabledStrategies?.bollinger !== false) signals = [...signals, ...bollingerBandsStrategy(data, historyMap, optimizedParamsMap)];
+  if (enabledStrategies?.supertrend !== false) signals = [...signals, ...supertrendStrategy(data, historyMap, optimizedParamsMap)];
   if (enabledStrategies?.vwap !== false) signals = [...signals, ...vwapStrategy(data)];
   if (enabledStrategies?.emaCross !== false) signals = [...signals, ...emaCrossoverStrategy(data, historyMap)];
   if (enabledStrategies?.vwapPullback !== false) signals = [...signals, ...vwapPullbackStrategy(data, historyMap)];

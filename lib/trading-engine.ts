@@ -158,6 +158,7 @@ export async function logTradingEvent(
 }
 
 export function isMarketOpen(): boolean {
+  if (process.env.IGNORE_MARKET_HOURS === 'true') return true;
   const now = new Date();
   const istString = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
   const istDate = new Date(istString);
@@ -177,6 +178,7 @@ export function isMarketOpen(): boolean {
 }
 
 export function shouldSquareOff(squareOffTime: string = '15:10'): boolean {
+  if (process.env.IGNORE_MARKET_HOURS === 'true') return false;
   const now = new Date();
   const istString = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
   const istDate = new Date(istString);

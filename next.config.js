@@ -6,6 +6,7 @@ const nextConfig = {
   output: process.env.NEXT_OUTPUT_MODE,
   productionBrowserSourceMaps: false,
   experimental: {
+    instrumentationHook: true,
     // Restrict tracing root to the current project directory to prevent traversing C:\ on Windows
     outputFileTracingRoot: __dirname,
   },

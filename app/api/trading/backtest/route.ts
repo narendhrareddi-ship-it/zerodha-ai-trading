@@ -10,6 +10,7 @@ import {
   MarketDataPoint
 } from '@/lib/strategies';
 import { WATCHLIST_STOCKS } from '@/lib/kite';
+import { calculateIntradayTaxes } from '@/lib/taxes-estimator';
 
 interface BacktestTrade {
   day: number;
@@ -93,11 +94,27 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const strategyName = body?.strategy ?? 'MOMENTUM';
-    const period = Math.min(90, Math.max(7, body?.period ?? 30));
-    const capital = body?.capital ?? 10000;
-    const maxDailyLoss = body?.maxDailyLoss ?? 500;
-    const stopLossPct = body?.stopLossPercent ?? 1.0;
-    const targetPct = body?.targetPercent ?? 2.0;
+
+    // Parse period string: '1M' -> 30, '3M' -> 90, '6M' -> 180, '1Y' -> 365
+    let periodDays = 30;
+    if (typeof body?.period === 'string') {
+      if (body.period === '1M') periodDays = 30;
+      else if (body.period === '3M') periodDays = 90;
+      else if (body.period === '6M') periodDays = 180;
+      else if (body.period === '1Y') periodDays = 365;
+      else {
+        const parsed = parseInt(body.period, 10);
+        if (!isNaN(parsed)) periodDays = parsed;
+      }
+    } else if (typeof body?.period === 'number') {
+      periodDays = body.period;
+    }
+    const period = Math.min(365, Math.max(7, periodDays));
+
+    const capital = Number(body?.capital ?? 10000);
+    const maxDailyLoss = Number(body?.maxDailyLoss ?? 500);
+    const stopLossPct = Number(body?.stopLossPercent ?? 1.0);
+    const targetPct = Number(body?.targetPercent ?? 2.0);
 
     const runner = STRATEGY_RUNNERS[strategyName];
     if (!runner) {
@@ -159,18 +176,27 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        const pnl = signal.direction === 'BUY'
-          ? (exitPrice - signal.entryPrice) * maxQty
-          : (signal.entryPrice - exitPrice) * maxQty;
+        // Model transaction costs & taxes + 0.05% slippage on exit fill
+        const slippageMultiplier = signal.direction === 'BUY' ? 0.9995 : 1.0005;
+        const adjustedExitPrice = exitPrice * slippageMultiplier;
+
+        const taxes = calculateIntradayTaxes(
+          signal.entryPrice,
+          adjustedExitPrice,
+          maxQty,
+          signal.direction as any,
+          'kite' // Default discount broker charge modeling in backtest
+        );
+        const pnl = taxes.netPnl;
 
         runningCapital += pnl;
         dailyPnl += pnl;
 
         trades.push({
           day, symbol: signal.symbol ?? '', direction: signal.direction,
-          entryPrice: signal.entryPrice, exitPrice: Math.round(exitPrice * 100) / 100,
+          entryPrice: signal.entryPrice, exitPrice: Math.round(adjustedExitPrice * 100) / 100,
           pnl: Math.round(pnl * 100) / 100,
-          strategy: strategyName, reason: `${signal.reason ?? ''} [${hit}]`,
+          strategy: strategyName, reason: `${signal.reason ?? ''} [${hit}] (Fees/Slippage: ₹${(taxes.totalTaxes + Math.abs(exitPrice - adjustedExitPrice) * maxQty).toFixed(2)})`,
         });
 
         // Check daily loss limit
@@ -199,7 +225,20 @@ export async function POST(request: NextRequest) {
       : 1;
     const sharpeRatio = dailyStdDev > 0 ? (avgDailyPnl / dailyStdDev) * Math.sqrt(252) : 0;
 
-    // Save to DB
+    // Sortino ratio approximation (downside deviation of negative daily returns)
+    const negativeDailyPnls = dailyPnls.filter(p => p < 0);
+    const downsideStdDev = negativeDailyPnls.length > 1
+      ? Math.sqrt(negativeDailyPnls.reduce((s, p) => s + Math.pow(p, 2), 0) / negativeDailyPnls.length)
+      : 1;
+    const sortinoRatio = downsideStdDev > 0 ? (avgDailyPnl / downsideStdDev) * Math.sqrt(252) : 0;
+
+    // Recovery Factor: Net PnL divided by Max Drawdown
+    const recoveryFactor = maxDrawdown > 0 ? Math.round((totalPnl / maxDrawdown) * 100) / 100 : totalPnl > 0 ? 99 : 0;
+
+    // Payoff Ratio: Avg Win / Avg Loss
+    const payoffRatio = Math.abs(avgLoss) > 0 ? Math.round((avgWin / Math.abs(avgLoss)) * 100) / 100 : 0;
+
+    // Save to DB (including Sortino, Recovery Factor, and Payoff Ratio inside tradesData JSON)
     const result = await prisma.backtestResult.create({
       data: {
         userId,
@@ -215,7 +254,14 @@ export async function POST(request: NextRequest) {
         profitFactor: Math.round(profitFactor * 100) / 100,
         avgWin: Math.round(avgWin * 100) / 100,
         avgLoss: Math.round(avgLoss * 100) / 100,
-        tradesData: JSON.stringify(trades.slice(0, 50)),
+        tradesData: JSON.stringify({
+          trades: trades.slice(0, 50),
+          metrics: {
+            sortinoRatio: Math.round(sortinoRatio * 100) / 100,
+            recoveryFactor,
+            payoffRatio,
+          }
+        }),
       },
     });
 
@@ -229,29 +275,40 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       id: result.id,
       strategy: strategyName,
-      period,
+      period: rPeriodString(period),
       capital,
       finalCapital: Math.round(runningCapital * 100) / 100,
       totalReturn: Math.round(((runningCapital - capital) / capital * 100) * 100) / 100,
-      overview: {
-        totalTrades: trades.length,
-        winCount: wins.length,
-        lossCount: losses.length,
-        totalPnl: Math.round(totalPnl * 100) / 100,
-        winRate: Math.round(winRate * 100) / 100,
-        avgWin: Math.round(avgWin * 100) / 100,
-        avgLoss: Math.round(avgLoss * 100) / 100,
-        maxDrawdown: Math.round(maxDrawdown * 100) / 100,
-        sharpeRatio: Math.round(sharpeRatio * 100) / 100,
-        profitFactor: Math.round(profitFactor * 100) / 100,
-      },
+      totalTrades: trades.length,
+      winCount: wins.length,
+      lossCount: losses.length,
+      totalPnl: Math.round(totalPnl * 100) / 100,
+      winRate: Math.round(winRate * 100) / 100,
+      maxDrawdown: Math.round(maxDrawdown * 100) / 100,
+      sharpeRatio: Math.round(sharpeRatio * 100) / 100,
+      profitFactor: Math.round(profitFactor * 100) / 100,
+      avgWin: Math.round(avgWin * 100) / 100,
+      avgLoss: Math.round(avgLoss * 100) / 100,
+      sortinoRatio: Math.round(sortinoRatio * 100) / 100,
+      recoveryFactor,
+      payoffRatio,
       equityCurve,
-      trades: trades.slice(0, 30),
+      trades: trades.slice(0, 50),
+      createdAt: new Date().toISOString(),
     });
   } catch (err: any) {
     console.error('Backtest error:', err);
     return NextResponse.json({ error: err?.message ?? 'Backtest failed' }, { status: 500 });
   }
+}
+
+// Helper for period strings
+function rPeriodString(p: number): string {
+  if (p === 30) return '1M';
+  if (p === 90) return '3M';
+  if (p === 180) return '6M';
+  if (p === 365) return '1Y';
+  return `${p}D`;
 }
 
 // GET: Fetch past backtest results
@@ -264,12 +321,41 @@ export async function GET(request: NextRequest) {
     where: { userId },
     orderBy: { createdAt: 'desc' },
     take: 20,
-    select: {
-      id: true, strategyName: true, period: true, totalTrades: true,
-      winCount: true, lossCount: true, totalPnl: true, winRate: true,
-      maxDrawdown: true, sharpeRatio: true, profitFactor: true, createdAt: true,
-    },
   });
 
-  return NextResponse.json({ results });
+  const formattedResults = results.map(r => {
+    let tradesArray: any[] = [];
+    let extraMetrics = { sortinoRatio: 0, recoveryFactor: 0, payoffRatio: 0 };
+    if (r.tradesData) {
+      try {
+        const parsed = JSON.parse(r.tradesData);
+        if (parsed && typeof parsed === 'object') {
+          if (Array.isArray(parsed)) {
+            tradesArray = parsed;
+          } else {
+            tradesArray = parsed.trades ?? [];
+            extraMetrics = parsed.metrics ?? extraMetrics;
+          }
+        }
+      } catch {}
+    }
+    return {
+      id: r.id,
+      strategy: r.strategyName,
+      period: rPeriodString(r.period),
+      totalTrades: r.totalTrades,
+      winRate: r.winRate,
+      totalPnl: r.totalPnl,
+      maxDrawdown: r.maxDrawdown,
+      sharpeRatio: r.sharpeRatio,
+      profitFactor: r.profitFactor,
+      avgWin: r.avgWin,
+      avgLoss: r.avgLoss,
+      createdAt: r.createdAt.toISOString(),
+      trades: tradesArray,
+      ...extraMetrics
+    };
+  });
+
+  return NextResponse.json({ results: formattedResults });
 }

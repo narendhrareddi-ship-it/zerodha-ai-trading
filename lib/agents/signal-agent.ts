@@ -21,6 +21,7 @@ export interface SignalAgentConfig {
   newsHeadlines?: string[];
   apiKey?: string;
   strategyWeights?: Record<string, number>;
+  optimizedParamsMap?: Map<string, Map<string, any>>;
 }
 
 export interface AgentSignal extends TradeSignal {
@@ -59,7 +60,7 @@ export async function runSignalAgent(
   const regime = detectMarketRegime(stocks);
 
   // 2. Run all indicator strategies
-  const rawSignals = runAllStrategies(stocks, config.enabledStrategies, historyMap);
+  const rawSignals = runAllStrategies(stocks, config.enabledStrategies, historyMap, config.optimizedParamsMap);
 
   // 3. Run FinBERT news sentiment if enabled
   let sentimentSignals: TradeSignal[] = [];

@@ -139,6 +139,9 @@ export async function POST(request: Request) {
       supertrend: config.enableSupertrend,
       vwap: config.enableVWAP,
       emaCross: config.enableEMACross,
+      vwapPullback: config.enableVwapPullback,
+      volBreakout: config.enableVolBreakout,
+      ofiVsa: config.enableOfiVsa,
     };
 
     const strategyWeights = await getStrategyWeightsFromDb(userId);
@@ -146,7 +149,7 @@ export async function POST(request: Request) {
     const signalResult = await runSignalAgent(stocks, histMap, {
       enabledStrategies,
       minVoteCount: 2,
-      minConfidenceThreshold: 60,
+      minConfidenceThreshold: 65,
       enableXGBoost: true,
       enableNewsSentiment: config.enableNewsSentiment,
       newsHeadlines,

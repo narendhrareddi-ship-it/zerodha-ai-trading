@@ -4,6 +4,7 @@
 
 import { prisma } from '../db';
 import { shouldSquareOff, isMarketOpen } from '../trading-engine';
+import { calculateIntradayTaxes } from '../taxes-estimator';
 
 export interface PositionMonitorResult {
   positionsChecked: number;
@@ -43,8 +44,14 @@ export async function runPortfolioManagerAgent(
   currentPrices: Map<string, number>,
   paperTrading: boolean,
   trailingStopPct: number = 1.0,
-  squareOffTime: string = '15:10'
+  squareOffTime: string = '15:10',
+  allowLongTrades: boolean = true,
+  allowShortTrades: boolean = true,
+  currentRegime?: string
 ): Promise<PositionMonitorResult> {
+  const config = await prisma.tradingConfig.findUnique({ where: { userId } });
+  const brokerType = (config?.brokerType ?? 'kite') as any;
+
   const openTrades = await prisma.trade.findMany({
     where: { userId, status: 'OPEN' },
   });
@@ -76,6 +83,19 @@ export async function runPortfolioManagerAgent(
     if (forceSquareOff) {
       action = 'SQUARE_OFF';
       exitReason = 'EOD square-off';
+      shouldExit = true;
+      squaredOff++;
+    }
+    // Regime filter early square-off
+    else if (isBuy && !allowLongTrades) {
+      action = 'SQUARE_OFF';
+      exitReason = `Regime shift: Longs restricted under ${currentRegime || 'bearish'} regime`;
+      shouldExit = true;
+      squaredOff++;
+    }
+    else if (!isBuy && !allowShortTrades) {
+      action = 'SQUARE_OFF';
+      exitReason = `Regime shift: Shorts restricted under ${currentRegime || 'bullish'} regime`;
       shouldExit = true;
       squaredOff++;
     }
@@ -137,10 +157,20 @@ export async function runPortfolioManagerAgent(
     }
 
     if (shouldExit) {
-      const realizedPnl = isBuy
-        ? (currentPrice - trade.entryPrice) * trade.quantity
-        : (trade.entryPrice - currentPrice) * trade.quantity;
+      const taxes = calculateIntradayTaxes(
+        trade.entryPrice,
+        currentPrice,
+        trade.quantity,
+        trade.direction as any,
+        brokerType
+      );
+      const realizedPnl = taxes.netPnl;
       totalPnl += realizedPnl;
+
+      const taxNotes = `Taxes: ₹${taxes.totalTaxes.toFixed(2)} (STT: ₹${taxes.stt.toFixed(2)}, Brokerage: ₹${taxes.brokerage.toFixed(2)}, Exch: ₹${taxes.exchangeCharges.toFixed(2)})`;
+      const noteMessage = paperTrading
+        ? `[PAPER] ${action}: ${exitReason} | ${taxNotes}`
+        : `${action}: ${exitReason} | ${taxNotes}`;
 
       // Close the trade
       if (!paperTrading) {
@@ -151,6 +181,7 @@ export async function runPortfolioManagerAgent(
             exitPrice: currentPrice,
             pnl: realizedPnl,
             exitTime: new Date(),
+            notes: noteMessage,
           },
         });
 
@@ -179,7 +210,7 @@ export async function runPortfolioManagerAgent(
             exitPrice: currentPrice,
             pnl: realizedPnl,
             exitTime: new Date(),
-            notes: `[PAPER] ${action}: ${exitReason}`,
+            notes: noteMessage,
           },
         });
       }

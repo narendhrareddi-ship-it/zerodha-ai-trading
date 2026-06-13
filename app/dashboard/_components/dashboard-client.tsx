@@ -276,25 +276,90 @@ export function DashboardClient() {
 
           <BotControls {...botControlsProps} />
 
-          {/* Auto-scan status indicator */}
-          {dashboardData?.botStatus === 'RUNNING' && (
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <div className={`w-2 h-2 rounded-full ${scanning ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
-              <span>
-                {scanning ? 'AI scan in progress...' : `Auto-scanning every 30s${lastScanTime ? ` · Last: ${lastScanTime.toLocaleTimeString()}` : ''}`}
-              </span>
-              {lastScanResult?.regime?.regime && (
-                <span className="ml-2 px-2 py-0.5 bg-gray-800 rounded-full text-gray-400">
-                  Regime: {lastScanResult.regime.regime}
-                </span>
-              )}
-              {lastScanResult?.risk?.portfolioHeat !== undefined && (
-                <span className="px-2 py-0.5 bg-gray-800 rounded-full text-gray-400">
-                  Heat: {lastScanResult.risk.portfolioHeat?.toFixed(1)}%
-                </span>
-              )}
+          {/* J.A.R.V.I.S. Quantum Telemetry Card */}
+          <div className={`relative overflow-hidden border rounded-xl backdrop-blur-md transition-all duration-300 ${
+            dashboardData?.botStatus === 'RUNNING' 
+              ? 'border-cyan-500/30 bg-[#061226]/40 glow-cyan' 
+              : 'border-border bg-card/40'
+          }`}>
+            <div className="absolute inset-0 cyber-grid opacity-[0.08] pointer-events-none" />
+            <div className="p-4 flex flex-col md:flex-row items-center justify-between gap-4 relative z-10">
+              
+              {/* Telemetry Left: Core Status */}
+              <div className="flex items-center gap-3 w-full md:w-auto">
+                <div className="relative flex items-center justify-center w-8 h-8">
+                  <div className={`absolute w-full h-full rounded-full border border-cyan-400/30 ${scanning ? 'animate-spin' : 'animate-pulse'}`} />
+                  <div className={`w-3.5 h-3.5 rounded-full ${
+                    scanning 
+                      ? 'bg-amber-400 animate-pulse shadow-[0_0_8px_#f59e0b]' 
+                      : dashboardData?.botStatus === 'RUNNING' 
+                      ? 'bg-emerald-400 shadow-[0_0_8px_#10b981]' 
+                      : 'bg-rose-400 shadow-[0_0_8px_#f43f5e]'
+                  }`} />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[9px] font-mono tracking-widest text-muted-foreground uppercase">Synapse Pipeline Feed</span>
+                  <span className="text-xs font-mono font-bold text-gray-200">
+                    {scanning 
+                      ? 'INTERROGATING QUANT QUOTES...' 
+                      : dashboardData?.botStatus === 'RUNNING' 
+                      ? `INTELLIGENCE ROUTING ENGINE: ACTIVE [Awaiting 30s Poll]`
+                      : 'INTELLIGENCE ROUTING ENGINE: STANDBY'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Telemetry Right: Live Metrics Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full md:w-auto text-[10px] font-mono">
+                {/* Active Regime */}
+                <div className="flex flex-col border-l border-cyan-500/20 pl-3">
+                  <span className="text-[8px] text-muted-foreground uppercase tracking-widest">Market Regime</span>
+                  <span className={`font-bold uppercase tracking-wider ${
+                    lastScanResult?.regime?.regime === 'TRENDING_UP' 
+                      ? 'text-emerald-400' 
+                      : lastScanResult?.regime?.regime === 'TRENDING_DOWN' 
+                      ? 'text-rose-400' 
+                      : lastScanResult?.regime?.regime === 'VOLATILE'
+                      ? 'text-amber-400'
+                      : 'text-cyan-400'
+                  }`}>
+                    {lastScanResult?.regime?.regime ?? 'AWAITING SCAN'}
+                  </span>
+                </div>
+
+                {/* Portfolio Heat */}
+                <div className="flex flex-col border-l border-cyan-500/20 pl-3">
+                  <span className="text-[8px] text-muted-foreground uppercase tracking-widest">Portfolio Heat</span>
+                  <span className="text-cyan-300 font-bold">
+                    {lastScanResult?.risk?.portfolioHeat !== undefined 
+                      ? `${lastScanResult.risk.portfolioHeat.toFixed(1)}%` 
+                      : '0.0%'}
+                  </span>
+                </div>
+
+                {/* Ensemble Threshold */}
+                <div className="flex flex-col border-l border-cyan-500/20 pl-3">
+                  <span className="text-[8px] text-muted-foreground uppercase tracking-widest">Ensemble gate</span>
+                  <span className="text-violet-400 font-bold">
+                    {dashboardData?.botStatus === 'RUNNING' ? '2/3 VOTE MIN' : 'OFFLINE'}
+                  </span>
+                </div>
+
+                {/* Last Refresh */}
+                <div className="flex flex-col border-l border-cyan-500/20 pl-3">
+                  <span className="text-[8px] text-muted-foreground uppercase tracking-widest">Last Update</span>
+                  <span className="text-amber-400 font-bold">
+                    {lastScanTime ? lastScanTime.toLocaleTimeString() : 'NEVER'}
+                  </span>
+                </div>
+              </div>
             </div>
-          )}
+            
+            {/* Ticker scanner bar */}
+            {scanning && (
+              <div className="h-[1px] w-full bg-cyan-400 animate-pulse-green glow-cyan" />
+            )}
+          </div>
 
           {/* ═══════════════════════════════════════════════════════
               PERFORMANCE: Only render the ACTIVE tab's content.

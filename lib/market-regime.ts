@@ -17,6 +17,26 @@ export interface RegimeAnalysis {
   disabledStrategies: string[];
 }
 
+function gaussianLogPdf(x: number, mean: number, std: number): number {
+  if (std <= 0) return -100;
+  const variance = std * std;
+  return -0.5 * Math.log(2 * Math.PI * variance) - Math.pow(x - mean, 2) / (2 * variance);
+}
+
+const HMM_STATES: {
+  name: MarketRegime;
+  meanReturn: number;
+  stdReturn: number;
+  meanVol: number;
+  stdVol: number;
+  prior: number;
+}[] = [
+  { name: 'TRENDING_UP', meanReturn: 0.6, stdReturn: 0.4, meanVol: 0.8, stdVol: 0.4, prior: 0.25 },
+  { name: 'TRENDING_DOWN', meanReturn: -0.6, stdReturn: 0.4, meanVol: 0.8, stdVol: 0.4, prior: 0.25 },
+  { name: 'SIDEWAYS', meanReturn: 0.0, stdReturn: 0.25, meanVol: 0.4, stdVol: 0.2, prior: 0.35 },
+  { name: 'VOLATILE', meanReturn: 0.0, stdReturn: 0.8, meanVol: 1.8, stdVol: 0.8, prior: 0.15 }
+];
+
 export function detectMarketRegime(data: MarketDataPoint[]): RegimeAnalysis {
   if (!data?.length) {
     return {
@@ -27,56 +47,67 @@ export function detectMarketRegime(data: MarketDataPoint[]): RegimeAnalysis {
     };
   }
 
-  // Calculate market breadth and direction
+  // Calculate market breadth and direction metrics
   const changes = data.map(d => d?.changePct ?? 0);
   const avgChange = changes.reduce((a, b) => a + b, 0) / changes.length;
   const advancing = changes.filter(c => c > 0.25).length;
   const declining = changes.filter(c => c < -0.25).length;
   const breadth = data.length > 0 ? Math.max(advancing, declining) / data.length : 0;
-
-  // Calculate volatility (standard deviation of changes)
   const variance = changes.reduce((sum, c) => sum + Math.pow(c - avgChange, 2), 0) / changes.length;
   const volatility = Math.sqrt(variance);
 
-  // Classification using statistical boundaries
-  let regime: MarketRegime;
-  let confidence: number;
-  let description: string;
-  let recommendedStrategies: string[];
-  let disabledStrategies: string[];
+  // Evaluate HMM Log-Likelihoods for the market average observations
+  const logLikelihoods = HMM_STATES.map(state => {
+    let logProb = Math.log(state.prior);
+    logProb += gaussianLogPdf(avgChange, state.meanReturn, state.stdReturn);
+    logProb += gaussianLogPdf(volatility, state.meanVol, state.stdVol);
+    return logProb;
+  });
 
-  // 1. Extreme Volatility / Churn check (Z-Score of standard deviation > 2.2)
-  if (volatility > 2.2 && Math.abs(avgChange) < 0.4) {
-    regime = 'VOLATILE';
-    confidence = Math.min(95, 60 + (volatility - 2.2) * 15);
-    description = `Volatile Range-bound: High intraday dispersion (${volatility.toFixed(2)}%) but no market direction. Reduce position sizing and avoid momentum.`;
-    recommendedStrategies = ['BOLLINGER', 'RSI', 'SUPERTREND'];
-    disabledStrategies = ['MOMENTUM', 'EMA_CROSS', 'VWAP'];
+  // Log-Sum-Exp normalization to obtain posterior state probabilities
+  const maxLog = Math.max(...logLikelihoods);
+  const exps = logLikelihoods.map(l => Math.exp(l - maxLog));
+  const sumExps = exps.reduce((a, b) => a + b, 0);
+  const posteriors = exps.map(e => e / (sumExps || 1));
+
+  let bestStateIndex = 0;
+  let maxPosterior = 0;
+  for (let i = 0; i < posteriors.length; i++) {
+    const post = posteriors[i] ?? 0;
+    if (post > maxPosterior) {
+      maxPosterior = post;
+      bestStateIndex = i;
+    }
   }
-  // 2. Bullish Trend check (positive change with high consensus breadth)
-  else if (avgChange > 0.45 && breadth > 0.55) {
-    regime = 'TRENDING_UP';
-    confidence = Math.min(95, 50 + (avgChange * 20) + (breadth * 30));
-    description = `Bullish Trend: Market advancing with ${(breadth * 100).toFixed(0)}% asset alignment. Sizing is optimized for Long momentum entries.`;
-    recommendedStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS', 'MACD', 'VWAP_PULLBACK', 'VOLUME_BREAKOUT'];
-    disabledStrategies = ['BOLLINGER', 'VWAP']; // Mean reversion fails in strong trends
-  }
-  // 3. Bearish Trend check (negative change with high consensus breadth)
-  else if (avgChange < -0.45 && breadth > 0.55) {
-    regime = 'TRENDING_DOWN';
-    confidence = Math.min(95, 50 + (Math.abs(avgChange) * 20) + (breadth * 30));
-    description = `Bearish Trend: Market declining with ${(breadth * 100).toFixed(0)}% asset alignment. Long entries are restricted.`;
-    recommendedStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS', 'MACD', 'VWAP_PULLBACK', 'VOLUME_BREAKOUT'];
-    disabledStrategies = ['BOLLINGER', 'VWAP'];
-  }
-  // 4. Default: Sideways / Quiet Range-bound
-  else {
-    regime = 'SIDEWAYS';
-    const quietFactor = Math.max(0, 1.5 - volatility);
-    confidence = Math.min(90, 50 + quietFactor * 25 + (1 - Math.abs(avgChange)) * 15);
-    description = `Sideways Quiet: Range-bound consolidation. Ideal setup for mean reversion (RSI, Bollinger Bands, and VWAP).`;
-    recommendedStrategies = ['RSI', 'BOLLINGER', 'VWAP', 'OFI_VSA'];
-    disabledStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS'];
+
+  const bestState = HMM_STATES[bestStateIndex] ?? HMM_STATES[2]!;
+  const regime = bestState.name;
+  const confidence = Math.round(maxPosterior * 100);
+
+  let description = '';
+  let recommendedStrategies: string[] = [];
+  let disabledStrategies: string[] = [];
+
+  switch (regime) {
+    case 'VOLATILE':
+      description = `HMM Volatile State: High intraday dispersion (${volatility.toFixed(2)}%) but no clear direction. Reduce sizing.`;
+      recommendedStrategies = ['BOLLINGER', 'RSI', 'SUPERTREND'];
+      disabledStrategies = ['MOMENTUM', 'EMA_CROSS', 'VWAP'];
+      break;
+    case 'TRENDING_UP':
+      description = `HMM Bullish Trend State: Market advancing with ${(breadth * 100).toFixed(0)}% asset alignment. Long bias active.`;
+      recommendedStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS', 'MACD', 'VWAP_PULLBACK', 'VOLUME_BREAKOUT'];
+      disabledStrategies = ['BOLLINGER', 'VWAP'];
+      break;
+    case 'TRENDING_DOWN':
+      description = `HMM Bearish Trend State: Market declining with ${(breadth * 100).toFixed(0)}% asset alignment. Long entries blocked.`;
+      recommendedStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS', 'MACD', 'VWAP_PULLBACK', 'VOLUME_BREAKOUT'];
+      disabledStrategies = ['BOLLINGER', 'VWAP'];
+      break;
+    default:
+      description = `HMM Sideways State: Range-bound consolidation. Ideal setup for mean reversion strategies.`;
+      recommendedStrategies = ['RSI', 'BOLLINGER', 'VWAP', 'OFI_VSA'];
+      disabledStrategies = ['MOMENTUM', 'SUPERTREND', 'EMA_CROSS'];
   }
 
   return {
@@ -101,11 +132,30 @@ export function filterSignalsByRegime(
   return signals.map((s) => {
     const adjusted = { ...s };
 
-    if (regime.recommendedStrategies.includes(s.strategy)) {
+    const strat = s.strategy;
+    const isTrending = regime.regime === 'TRENDING_UP' || regime.regime === 'TRENDING_DOWN';
+    const isMeanReversion = strat === 'RSI' || strat === 'BOLLINGER' || strat === 'BOLLINGER_BANDS' || strat === 'VWAP';
+    const isTrendFollowing = strat === 'MOMENTUM' || strat === 'EMA_CROSS' || strat === 'EMA_CROSSOVER' || strat === 'MACD' || strat === 'SUPERTREND';
+
+    // Strict multi-regime strategy mapping exclusions:
+    // 1. Block mean reversion strategies in strong trending structures (catch no falling knives)
+    if (isTrending && isMeanReversion) {
+      adjusted.confidence = 0;
+      return adjusted;
+    }
+
+    // 2. Block trend-following breakout strategies in sideways ranging consolidation (avoid choppy churn)
+    if (!isTrending && isTrendFollowing) {
+      adjusted.confidence = 0;
+      return adjusted;
+    }
+
+    // Standard adjustments for active strategies:
+    if (regime.recommendedStrategies.includes(strat)) {
       adjusted.confidence = Math.min(95, (s.confidence ?? 50) + 10);
     }
 
-    if (regime.disabledStrategies.includes(s.strategy)) {
+    if (regime.disabledStrategies.includes(strat)) {
       adjusted.confidence = Math.max(0, (adjusted.confidence ?? 50) - 20);
     }
 

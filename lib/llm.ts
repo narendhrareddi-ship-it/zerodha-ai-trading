@@ -52,6 +52,7 @@ async function executeGemini(options: CompletionOptions, apiKey: string): Promis
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(5000), // 5-second timeout
   });
 
   if (!res.ok) {
@@ -90,6 +91,7 @@ async function executeAbacusAI(options: CompletionOptions, apiKey: string): Prom
       'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(5000), // 5-second timeout
   });
 
   if (!res.ok) {

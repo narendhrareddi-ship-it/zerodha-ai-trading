@@ -20,6 +20,7 @@ export async function fetchGoogleNewsHeadlines(): Promise<string[]> {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
+      signal: AbortSignal.timeout(3000), // 3-second timeout
       next: { revalidate: 300 }, // Cache for 5 minutes in Next.js
     } as any);
 
@@ -81,6 +82,7 @@ export async function fetchStockSpecificHeadlines(symbol: string): Promise<strin
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
       },
+      signal: AbortSignal.timeout(3000), // 3-second timeout
     });
 
     if (!response.ok) return [];

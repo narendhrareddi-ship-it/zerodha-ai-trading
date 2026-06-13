@@ -46,7 +46,10 @@ export class FyersClient {
       options.body = JSON.stringify(body);
     }
 
-    const response = await fetch(url, options);
+    const response = await fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(3000), // 3-second timeout
+    });
     if (!response?.ok) {
       const text = await response?.text?.().catch(() => 'Fyers API error');
       throw new Error(`Fyers API error (${response?.status}): ${text}`);

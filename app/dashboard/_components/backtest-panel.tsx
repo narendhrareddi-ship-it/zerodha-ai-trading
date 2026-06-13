@@ -38,6 +38,9 @@ interface BacktestResult {
   profitFactor: number;
   trades: any[];
   createdAt: string;
+  sortinoRatio?: number;
+  recoveryFactor?: number;
+  payoffRatio?: number;
 }
 
 const STRATEGIES = [
@@ -69,6 +72,10 @@ export function BacktestPanel() {
   // Backtest state
   const [strategy, setStrategy] = useState('MOMENTUM');
   const [period, setPeriod] = useState('3M');
+  const [capital, setCapital] = useState(10000);
+  const [maxDailyLoss, setMaxDailyLoss] = useState(500);
+  const [stopLossPercent, setStopLossPercent] = useState(1.0);
+  const [targetPercent, setTargetPercent] = useState(2.0);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [history, setHistory] = useState<BacktestResult[]>([]);
@@ -130,7 +137,14 @@ export function BacktestPanel() {
       const res = await fetch('/api/trading/backtest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strategy, period }),
+        body: JSON.stringify({
+          strategy,
+          period,
+          capital,
+          maxDailyLoss,
+          stopLossPercent,
+          targetPercent,
+        }),
       });
       const data = await res.json();
       if (res?.ok) {
@@ -198,9 +212,9 @@ export function BacktestPanel() {
             </CardTitle>
             <CardDescription>Test strategies against historical data to evaluate performance before going live</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="flex flex-col sm:flex-row gap-4 items-end">
-              <div className="flex-1 space-y-1">
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1">
                 <Label className="text-xs">Strategy</Label>
                 <Select value={strategy} onValueChange={setStrategy}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -211,7 +225,7 @@ export function BacktestPanel() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex-1 space-y-1">
+              <div className="space-y-1">
                 <Label className="text-xs">Period</Label>
                 <Select value={period} onValueChange={setPeriod}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -222,10 +236,52 @@ export function BacktestPanel() {
                   </SelectContent>
                 </Select>
               </div>
-              <Button onClick={runBacktest} loading={running} className="gap-2 min-w-[140px]">
-                <Play className="w-4 h-4" /> Run Backtest
-              </Button>
             </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 items-end">
+              <div className="space-y-1">
+                <Label className="text-xs">Capital (₹)</Label>
+                <input
+                  type="number"
+                  value={capital}
+                  onChange={(e) => setCapital(Number(e.target.value))}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Daily Loss Limit (₹)</Label>
+                <input
+                  type="number"
+                  value={maxDailyLoss}
+                  onChange={(e) => setMaxDailyLoss(Number(e.target.value))}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Stop Loss (%)</Label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={stopLossPercent}
+                  onChange={(e) => setStopLossPercent(Number(e.target.value))}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Target (%)</Label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={targetPercent}
+                  onChange={(e) => setTargetPercent(Number(e.target.value))}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                />
+              </div>
+            </div>
+
+            <Button onClick={runBacktest} loading={running} className="w-full gap-2 mt-2">
+              <Play className="w-4 h-4" /> Run Backtest Simulation
+            </Button>
           </CardContent>
         </Card>
 
@@ -290,6 +346,27 @@ export function BacktestPanel() {
                   label="Profit Factor"
                   value={(result.profitFactor ?? 0).toFixed(2)}
                   color={(result.profitFactor ?? 0) >= 1 ? 'text-emerald-500' : 'text-red-500'}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-t pt-4">
+                <MetricCard
+                  icon={<BarChart3 className="w-4 h-4 text-violet-400" />}
+                  label="Sortino Ratio"
+                  value={result.sortinoRatio != null ? result.sortinoRatio.toFixed(2) : '0.00'}
+                  color={result.sortinoRatio != null && result.sortinoRatio >= 1 ? 'text-emerald-500' : 'text-amber-500'}
+                />
+                <MetricCard
+                  icon={<TrendingUp className="w-4 h-4 text-emerald-400" />}
+                  label="Recovery Factor"
+                  value={result.recoveryFactor != null ? result.recoveryFactor.toFixed(2) : '0.00'}
+                  color={result.recoveryFactor != null && result.recoveryFactor >= 1.5 ? 'text-emerald-500' : 'text-amber-500'}
+                />
+                <MetricCard
+                  icon={<Target className="w-4 h-4 text-cyan-400" />}
+                  label="Payoff Ratio"
+                  value={result.payoffRatio != null ? result.payoffRatio.toFixed(2) : '0.00'}
+                  color={result.payoffRatio != null && result.payoffRatio >= 1.5 ? 'text-emerald-500' : 'text-amber-500'}
                 />
               </div>
 

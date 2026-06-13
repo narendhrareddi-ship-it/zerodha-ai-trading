@@ -61,24 +61,49 @@ export async function getLiveQuote(symbol: string): Promise<NSEQuote | null> {
   }
 }
 
-// Fetch live quotes for multiple symbols (batch)
+let cachedQuotes: NSEQuote[] = [];
+let lastCacheTime = 0;
+const CACHE_TTL_MS = 60_000;
+
+// Fetch live quotes for multiple symbols (batch with in-memory caching and rate-limiting shield)
 export async function getLiveQuotes(symbols: string[]): Promise<NSEQuote[]> {
-  const results: NSEQuote[] = [];
-  // Fetch in batches of 5 to avoid rate limiting
-  const batchSize = 5;
-  for (let i = 0; i < symbols.length; i += batchSize) {
-    const batch = symbols.slice(i, i + batchSize);
-    const promises = batch.map(s => getLiveQuote(s).catch(() => null));
-    const batchResults = await Promise.all(promises);
-    for (const r of batchResults) {
-      if (r) results.push(r);
-    }
-    // Small delay between batches to respect rate limits
-    if (i + batchSize < symbols.length) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
+  const now = Date.now();
+  
+  // Return cached quotes if within TTL
+  if (cachedQuotes.length > 0 && (now - lastCacheTime) < CACHE_TTL_MS) {
+    return cachedQuotes;
   }
-  return results;
+  
+  // Rate-limiting shield: if we tried within 30 seconds and got nothing, return empty immediately
+  if (cachedQuotes.length === 0 && lastCacheTime > 0 && (now - lastCacheTime) < 30_000) {
+    return [];
+  }
+
+  lastCacheTime = now; // Mark attempt time immediately to throttle concurrent requests
+
+  try {
+    const results: NSEQuote[] = [];
+    const batchSize = 5;
+    for (let i = 0; i < symbols.length; i += batchSize) {
+      const batch = symbols.slice(i, i + batchSize);
+      const promises = batch.map(s => getLiveQuote(s).catch(() => null));
+      const batchResults = await Promise.all(promises);
+      for (const r of batchResults) {
+        if (r) results.push(r);
+      }
+      // Small delay between batches to respect rate limits
+      if (i + batchSize < symbols.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    if (results.length > 0) {
+      cachedQuotes = results;
+    }
+    return results.length > 0 ? results : cachedQuotes;
+  } catch {
+    return cachedQuotes;
+  }
 }
 
 // Get market status (open/closed)

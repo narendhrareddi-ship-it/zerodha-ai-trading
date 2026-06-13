@@ -13,8 +13,8 @@ const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mon
 
 export const metadata = {
   metadataBase: new URL(process.env.NEXTAUTH_URL || 'http://localhost:3000'),
-  title: 'ZerodhaAI Trading Bot',
-  description: 'Autonomous AI-powered trading system for Zerodha',
+  title: 'H.E.R.M.E.S. Trading Bot',
+  description: 'Hybrid Execution & Risk Management Engine Safeguard',
   icons: {
     icon: '/favicon.svg',
     shortcut: '/favicon.svg',

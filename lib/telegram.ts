@@ -40,7 +40,7 @@ export async function sendTelegramMessage(chatId: string, text: string, parseMod
 export async function verifyTelegramChatId(chatId: string): Promise<boolean> {
   const result = await sendTelegramMessage(
     chatId,
-    '✅ <b>ZerodhaAI Trading Bot Connected!</b>\n\nYou will now receive trading notifications here.'
+    '✅ <b>H.E.R.M.E.S. Trading Bot Connected!</b>\n\nYou will now receive trading notifications here.'
   );
   return result?.ok === true;
 }

@@ -5,6 +5,8 @@
 import { prisma } from '../db';
 import { getPnlAttribution } from './portfolio-manager-agent';
 import { runWalkForwardOptimization } from '../walk-forward-optimizer';
+import { WATCHLIST_STOCKS } from '../kite';
+import { getBatchHistoricalPrices } from '../historical-data';
 
 export interface LearningInsight {
   category: 'STRATEGY' | 'REGIME' | 'TIMING' | 'SIZING' | 'MARKET';
@@ -181,8 +183,70 @@ export async function runSelfLearningAgent(
     create: { userId, weights: JSON.stringify(activeWeights) },
   });
 
-  // 4. Walk-forward re-optimization (weekly trigger — on Fridays or every 5th learning run)
-  const walkForwardTriggered = new Date().getDay() === 5; // Friday
+  // 4. Walk-forward re-optimization (weekly trigger — on Fridays or during closed-market simulations)
+  const walkForwardTriggered = new Date().getDay() === 5 || process.env.IGNORE_MARKET_HOURS === 'true';
+
+  if (walkForwardTriggered) {
+    try {
+      console.log('[Self-Learning] Triggering Walk-Forward parameter re-optimization...');
+      // Optimize the top 5 symbols to keep execution lightweight
+      const symbolsToOptimize = WATCHLIST_STOCKS.slice(0, 5);
+      const strategiesToOptimize = ['rsi', 'macd', 'bollinger', 'supertrend'];
+
+      // Fetch historical candles (80 bars) for optimization
+      const mockQuotes = symbolsToOptimize.map(s => ({ symbol: s, lastPrice: 100 } as any));
+      const histMap = await getBatchHistoricalPrices(mockQuotes, {
+        userId,
+        brokerType: 'kite'
+      }, 120);
+
+      for (const symbol of symbolsToOptimize) {
+        const hData = histMap.get(symbol);
+        if (!hData || !hData.closes || hData.closes.length < 30) continue;
+
+        // Convert HistoricalPrices format to CandleData format expected by walk-forward-optimizer
+        const candles = hData.candles.map(c => ({
+          timestamp: typeof c.timestamp === 'string' ? new Date(c.timestamp).getTime() : c.timestamp,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume
+        }));
+
+        for (const strategyName of strategiesToOptimize) {
+          const optResult = runWalkForwardOptimization(symbol, strategyName, candles);
+          
+          // Save optimized parameters to the database
+          await prisma.walkForwardResult.create({
+            data: {
+              userId,
+              symbol,
+              strategy: strategyName,
+              overallStability: optResult.overallStability,
+              robustnessScore: optResult.robustnessScore,
+              outSampleWinRate: optResult.outSampleWinRate,
+              outSampleProfitFactor: optResult.outSampleProfitFactor,
+              isRobust: optResult.isRobust,
+              recommendedParams: JSON.stringify(optResult.recommendedParams),
+              windowsData: JSON.stringify(optResult.windows)
+            }
+          });
+
+          if (optResult.isRobust) {
+            insights.push({
+              category: 'REGIME',
+              insight: `Walk-forward re-optimization successful for ${symbol} / ${strategyName.toUpperCase()}`,
+              action: `Applied new robust strategy parameters: ${JSON.stringify(optResult.recommendedParams)}`,
+              impact: 'HIGH'
+            });
+          }
+        }
+      }
+    } catch (wfErr: any) {
+      console.error('[Self-Learning] Walk-forward optimization failed:', wfErr?.message);
+    }
+  }
 
   // Create LearningEvent record
   await prisma.learningEvent.create({

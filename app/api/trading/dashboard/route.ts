@@ -119,6 +119,7 @@ export async function GET() {
       strategy: t?.strategy ?? '',
       entryTime: t?.entryTime?.toISOString?.() ?? '',
       exitTime: t?.exitTime?.toISOString?.() ?? null,
+      notes: t?.notes ?? null,
     })) ?? [];
 
     const logs = recentLogs?.map?.((l: any) => ({
@@ -141,14 +142,11 @@ export async function GET() {
     const { getLiveIndices } = await import('@/lib/nse-data');
     const indices = getLiveIndices();
 
-    // Fetch live capital balance if live mode is active
+    // Fetch live capital balance if a broker account is connected
     let capital = config?.capitalAmount ?? 10000;
-    const isLive = await checkIsLive(userId, config);
-    if (isLive) {
-      const realBalance = await getRealBrokerBalance(userId, config);
-      if (realBalance !== null && realBalance > 0) {
-        capital = realBalance;
-      }
+    const realBalance = await getRealBrokerBalance(userId, config);
+    if (realBalance !== null && realBalance > 0) {
+      capital = realBalance;
     }
 
     return NextResponse.json({
